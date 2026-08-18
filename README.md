@@ -1,4 +1,4 @@
-# whisper
+# Castellan Plugin
 Locksmith plugin intended for managing Weirwood server credentials
 
 ## Setup
