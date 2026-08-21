@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.core.remoting module
+castellan.core.remoting module
 
-Functions for interacting with the Weirwood credential management server.
+Functions for interacting with the Castellan credential management server.
 """
 import json
 import urllib.parse
@@ -22,7 +22,7 @@ def _get_essr(app: "LocksmithApplication"):
     """Get the ESSR client from plugin state."""
     if not app.vault:
         return None
-    return app.vault.plugin_state.get("whisper", {}).get("essr")
+    return app.vault.plugin_state.get("castellan", {}).get("essr")
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ async def fetch_issued_credentials(
     filter_term: Optional[str] = None,
     order: Optional[list] = None,
 ) -> Dict[str, Any]:
-    """Fetch issued credentials from the Weirwood server (paginated)."""
+    """Fetch issued credentials from the Castellan server (paginated)."""
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}
@@ -52,6 +52,8 @@ async def fetch_issued_credentials(
         path = f"/issued-credentials?{'&'.join(params)}"
         response = await essr.request(path=path, method="GET")
 
+        print(response.status_code)
+        print(response.text)
         if response is not None and response.status_code == 200:
             data = response.json()
             data['success'] = True
@@ -66,8 +68,8 @@ async def fetch_issued_credentials(
         return {'success': False, 'error': str(e)}
 
 
-async def fetch_all_weirwood_issued_saids(app: "LocksmithApplication") -> set:
-    """Fetch all issued credential SAIDs currently stored on the Weirwood server."""
+async def fetch_all_castellan_issued_saids(app: "LocksmithApplication") -> set:
+    """Fetch all issued credential SAIDs currently stored on the Castellan server."""
     essr = _get_essr(app)
     if not essr:
         return set()
@@ -79,7 +81,7 @@ async def fetch_all_weirwood_issued_saids(app: "LocksmithApplication") -> set:
             return {cred['said'] for cred in data.get('credentials', [])}
         return set()
     except Exception as e:
-        logger.error(f"Error fetching weirwood issued SAIDs: {e}")
+        logger.error(f"Error fetching castellan issued SAIDs: {e}")
         return set()
 
 
@@ -90,7 +92,7 @@ async def upload_issued_credential(
     issuer: str,
     recipient: str,
 ) -> Dict[str, Any]:
-    """Upload an issued credential to the Weirwood server."""
+    """Upload an issued credential to the Castellan server."""
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}
@@ -147,7 +149,7 @@ async def delete_issued_credential(
     app: "LocksmithApplication",
     said: str,
 ) -> Dict[str, Any]:
-    """Delete an issued credential from the Weirwood server."""
+    """Delete an issued credential from the Castellan server."""
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}
@@ -171,6 +173,153 @@ async def delete_issued_credential(
 
 
 # ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
+
+async def fetch_schemas(
+    app: "LocksmithApplication",
+    page: int = 0,
+    page_size: int = 10,
+    filter_term: Optional[str] = None,
+    order: Optional[list] = None,
+) -> Dict[str, Any]:
+    """Fetch schemas from the Castellan server (paginated)."""
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        params = [f"page={page}", f"page_size={page_size}"]
+        if filter_term:
+            params.append(f"filter={urllib.parse.quote(filter_term)}")
+        if order:
+            for o in order:
+                params.append(f"order={urllib.parse.quote(o)}")
+
+        path = f"/schemas?{'&'.join(params)}"
+        response = await essr.request(path=path, method="GET")
+
+        if response is not None and response.status_code == 200:
+            data = response.json()
+            data['success'] = True
+            return data
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}"
+            }
+    except Exception as e:
+        logger.error(f"Error fetching schemas: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def fetch_all_castellan_schema_saids(app: "LocksmithApplication") -> set:
+    """Fetch all schema SAIDs currently stored on the Castellan server."""
+    essr = _get_essr(app)
+    if not essr:
+        return set()
+
+    try:
+        response = await essr.request(path="/schemas?page_size=10000", method="GET")
+        if response is not None and response.status_code == 200:
+            data = response.json()
+            return {schema['said'] for schema in data.get('schemas', [])}
+        return set()
+    except Exception as e:
+        logger.error(f"Error fetching castellan schema SAIDs: {e}")
+        return set()
+
+
+async def upload_schema(
+    app: "LocksmithApplication",
+    schema_said: str,
+    title: str,
+    version: str,
+    description: str,
+    sad: dict,
+) -> Dict[str, Any]:
+    """Upload a schema to the Castellan server."""
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    if not app.vault or not app.vault.rgy:
+        return {'success': False, 'error': 'No local vault open'}
+
+    try:
+        reger = app.vault.rgy.reger
+
+        # Retrieve schema bytes from registry
+        schema_bytes = reger.schms.get(keys=(schema_said,))
+        if not schema_bytes:
+            return {'success': False, 'error': f'No schema data for {schema_said}'}
+
+        doc = {
+            'said': schema_said,
+            'title': title,
+            'version': version,
+            'description': description,
+            'sad': escape_keys(sad),
+        }
+
+        files = {
+            'schema': ('schema.json', bytes(schema_bytes), 'application/json'),
+            'doc': ('data.json', json.dumps(doc), 'application/json'),
+        }
+
+        response = await essr.request(
+            path="/schemas",
+            method="POST",
+            files=files,
+            timeout=60,
+        )
+
+        if response and response.status_code in (200, 201):
+            return {'success': True, 'data': response.json()}
+        else:
+            if response is not None:
+                logger.error(f"Upload failed with status {response.status_code}: {response.text}")
+                try:
+                    error_msg = response.json().get('description', f"Status {response.status_code}")
+                except Exception:
+                    error_msg = f"Status {response.status_code}"
+            else:
+                error_msg = "No response"
+            return {'success': False, 'error': error_msg}
+
+    except Exception as e:
+        logger.error(f"Error uploading schema: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def delete_schema(
+    app: "LocksmithApplication",
+    said: str,
+) -> Dict[str, Any]:
+    """Delete a schema from the Castellan server."""
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        response = await essr.request(
+            path=f"/schemas/{urllib.parse.quote(said, safe='')}",
+            method="DELETE",
+        )
+
+        if response is not None and response.status_code == 204:
+            return {'success': True}
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}"
+            }
+    except Exception as e:
+        logger.error(f"Error deleting schema: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+# ---------------------------------------------------------------------------
 # Received credentials
 # ---------------------------------------------------------------------------
 
@@ -181,7 +330,7 @@ async def fetch_received_credentials(
     filter_term: Optional[str] = None,
     order: Optional[list] = None,
 ) -> Dict[str, Any]:
-    """Fetch received credentials from the Weirwood server (paginated)."""
+    """Fetch received credentials from the Castellan server (paginated)."""
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}
@@ -211,8 +360,8 @@ async def fetch_received_credentials(
         return {'success': False, 'error': str(e)}
 
 
-async def fetch_all_weirwood_received_saids(app: "LocksmithApplication") -> set:
-    """Fetch all received credential SAIDs currently stored on the Weirwood server."""
+async def fetch_all_castellan_received_saids(app: "LocksmithApplication") -> set:
+    """Fetch all received credential SAIDs currently stored on the Castellan server."""
     essr = _get_essr(app)
     if not essr:
         return set()
@@ -224,7 +373,7 @@ async def fetch_all_weirwood_received_saids(app: "LocksmithApplication") -> set:
             return {cred['said'] for cred in data.get('credentials', [])}
         return set()
     except Exception as e:
-        logger.error(f"Error fetching weirwood received SAIDs: {e}")
+        logger.error(f"Error fetching castellan received SAIDs: {e}")
         return set()
 
 
@@ -235,7 +384,7 @@ async def upload_received_credential(
     issuer: str,
     holder: str,
 ) -> Dict[str, Any]:
-    """Upload a received credential to the Weirwood server."""
+    """Upload a received credential to the Castellan server."""
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}
@@ -292,7 +441,7 @@ async def delete_received_credential(
     app: "LocksmithApplication",
     said: str,
 ) -> Dict[str, Any]:
-    """Delete a received credential from the Weirwood server."""
+    """Delete a received credential from the Castellan server."""
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}

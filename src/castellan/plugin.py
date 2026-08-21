@@ -1,9 +1,9 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.plugin module
+Castellan.plugin module
 
-WhisperPlugin — the reference Locksmith plugin implementation.
-Registers Whisper page(s), menus, and lifecycle hooks.
+CastellanPlugin — the reference Locksmith plugin implementation.
+Registers castellan page(s), menus, and lifecycle hooks.
 """
 from __future__ import annotations
 
@@ -21,43 +21,61 @@ from locksmith.plugins.base import (
 from locksmith.ui.vault.menu import MenuButton
 from locksmith.ui.toolkit.widgets.buttons import BackButton, LocksmithButton
 
-from .db.basing import WhisperBaser, sync_account_to_whisper
+from .db.basing import CastellanBaser
 
 if TYPE_CHECKING:
     from locksmith.core.apping import LocksmithApplication
     from locksmith.core.vaulting import Vault
-    from locksmith.ui.vault.page import VaultPage
 
 logger = help.ogler.getLogger(__name__)
 
 
-class WhisperPlugin(
+class CastellanPlugin(
     PluginBase,
     AccountProviderPlugin,
 ):
-    """Reference Locksmith plugin for whisper platform integration."""
+    """Reference Locksmith plugin for castellan platform integration."""
 
     @property
     def plugin_id(self) -> str:
-        return "whisper"
+        return "castellan"
 
-    def initialize(self, app: "LocksmithApplication") -> None:
+    def initialize(self, app: "LocksmithApplication", parent) -> None:
         self._app = app
-        self._db: WhisperBaser | None = None
+        self.parent = parent
+        self._db: CastellanBaser | None = None
         self._pages: dict[str, QWidget] = {}
         self._build_pages(app)
         self._build_menu()
 
     def _build_pages(self, app: "LocksmithApplication") -> None:
-        """Instantiate all Whisper page widgets."""
+        """Instantiate all castellan page widgets."""
+        from .schema.list import SchemaListPage
         from .credentials.issued.list import IssuedCredentialsListPage
         from .credentials.received.list import ReceivedCredentialsListPage
+        from .setup import CastellanAdminSetupPage
+
+        castellan_setup = CastellanAdminSetupPage(app, self.parent)
 
         self._pages = {
-            "whisper_issued_credentials": IssuedCredentialsListPage(app, None),
-            "whisper_received_credentials": ReceivedCredentialsListPage(app, None),
-            "whisper_placeholder": WhisperPlaceholderPage("Whisper", None),
+            "castellan_schema": SchemaListPage(app, None),
+            "castellan_issued_credentials": IssuedCredentialsListPage(app, None),
+            "castellan_received_credentials": ReceivedCredentialsListPage(app, None),
+            "castellan_setup": castellan_setup,
+            "castellan_placeholder": CastellanPlaceholderPage("castellan", None),
         }
+
+        castellan_setup.setup_complete_clicked.connect(self._on_setup_complete_event)
+
+    def _show_issued_credentials(self):
+        vault_page = self._get_vault_page()
+        if vault_page:
+            vault_page.nav_menu.push_plugin_menu("castellan")
+            vault_page._show_page("castellan_issued_credentials")
+            create_page = self._pages.get("castellan_issued_credentialss")
+            if create_page and hasattr(create_page, "on_show"):
+                create_page.on_show()
+
 
     def _navigate(self, page_key: str) -> None:
         vault_page = self._get_vault_page()
@@ -75,11 +93,11 @@ class WhisperPlugin(
 
     def _build_menu(self) -> None:
         self._account_button = MenuButton(
-            QIcon(":/assets/material-icons/forest.svg"),
-            "Whisper Credentials"
+            QIcon(":/assets/custom/logos/castellan-lightmode.png"),
+            "KERIGuard Issuer"
         )
         self._account_button.is_account_btn = True
-        self._whisper_submenu_items = self._create_submenu_items()
+        self._castellan_submenu_items = self._create_submenu_items()
 
     def _create_submenu_items(self) -> list[QWidget]:
         items = []
@@ -94,8 +112,9 @@ class WhisperPlugin(
         items.append(MenuSpacer(15))
 
         nav_buttons_config = [
-            (":/assets/material-icons/out-badge.svg", "Issued Credentials", "whisper_issued_credentials"),
-            (":/assets/material-icons/in-badge.svg", "Received Credentials", "whisper_received_credentials"),
+            (":/assets/material-icons/schema.svg", "Schema", "castellan_schema"),
+            (":/assets/material-icons/badge_outgoing.svg", "Issued Credentials", "castellan_issued_credentials"),
+            (":/assets/material-icons/badge_incoming.svg", "Received Credentials", "castellan_received_credentials"),
         ]
 
         self._nav_buttons_by_page = {}
@@ -122,14 +141,14 @@ class WhisperPlugin(
         dialog.open()
 
     def _refresh_credential_pages(self):
-        for key in ("whisper_issued_credentials", "whisper_received_credentials"):
+        for key in ("castellan_issued_credentials", "castellan_received_credentials"):
             page = self._pages.get(key)
             if page and hasattr(page, "_refresh_table"):
                 page._refresh_table()
 
     def _make_nav_handler(self, page_key: str, button: MenuButton):
         def handler():
-            for item in self._whisper_submenu_items:
+            for item in self._castellan_submenu_items:
                 if isinstance(item, MenuButton):
                     item.set_active(False)
             button.set_active(True)
@@ -144,73 +163,34 @@ class WhisperPlugin(
     # -------------------------------------------------------------------------
 
     def on_vault_opened(self, vault: "Vault") -> None:
-        self._db = WhisperBaser(name=vault.hby.name, reopen=True)
+        self._db = CastellanBaser(name=vault.hby.name, reopen=True)
 
-        _, account = next(self._db.whisperAccounts.getItemIter(), (None, None))
-        _, team = next(self._db.whisperTeams.getItemIter(), (None, None))
-
-        whisper_cfg = self._app.config.plugin_configs.get("whisper", {})
-        weirwood_aid = whisper_cfg.get("weirwood_aid", "")
-        weirwood_oobi = whisper_cfg.get("weirwood_oobi", "")
-        weirwood_url = whisper_cfg.get("weirwood_url", "http://localhost:5922")
-
-        # Resolve weirwood0 OOBI so the vault habery has its keystate for ESSR encryption.
-        if weirwood_aid and weirwood_oobi:
-            if not vault.hby.db.roobi.get(keys=(weirwood_oobi,)):
-                from locksmith.core.remoting import resolve_oobi_sync
-                resolve_oobi_sync(
-                    app=self._app,
-                    pre=weirwood_aid,
-                    oobi=weirwood_oobi,
-                    alias="weirwood",
-                )
-
-        essr = None
-        if account is not None:
-            hab = vault.hby.habs.get(account.aid)
-            if hab is not None:
-                essr = APIClient(
-                    url=weirwood_url,
-                    root=weirwood_aid,
-                    hby=vault.hby,
-                    hab=hab
-                )
-
-        vault.plugin_state["whisper"] = {
-            "account": account,
-            "team": team,
-            "essr": essr,
+        _, settings = next(self._db.castellan_settings.getItemIter(), (None, None))  # type: ignore
+        vault.plugin_state["castellan"] = {
+            "settings": settings,
+            "essr": None,
             "db": self._db,
         }
 
-        # Listen for healthKERI account creation so whisper state stays current
-        # without requiring a vault lock/unlock cycle.
-        if hasattr(vault, 'signals') and vault.signals:
-            vault.signals.doer_event.connect(self._on_vault_doer_event)
+        if settings:
+            self.reset_essr(vault)
 
     def on_vault_closed(self, vault: "Vault") -> None:
-        if hasattr(vault, 'signals') and vault.signals:
-            try:
-                vault.signals.doer_event.disconnect(self._on_vault_doer_event)
-            except (RuntimeError, TypeError):
-                pass
-        vault.plugin_state.pop("whisper", None)
+        vault.plugin_state.pop("castellan", None)
         if self._db:
             self._db.close()
             self._db = None
 
-    def _on_vault_doer_event(self, doer_name: str, event_type: str, data: dict) -> None:
-        """Handle vault-level doer events relevant to the whisper plugin."""
-        if doer_name == "TeamCreationPage" and event_type == "hk_team_created":
-            logger.info("WhisperPlugin: healthKERI account created — syncing to whisper state")
-            sync_account_to_whisper(self._app)
-            self.resetEssr(self._app.vault)
+    def _on_setup_complete_event(self) -> None:
+        """Handle vault-level doer events relevant to the castellan plugin."""
+        self.reset_essr(self._app.vault)
+        self._show_issued_credentials()
 
     def get_menu_entry(self) -> MenuButton:
         return self._account_button
 
     def get_menu_section(self) -> list[QWidget]:
-        return self._whisper_submenu_items
+        return self._castellan_submenu_items
 
     def get_pages(self) -> dict[str, QWidget]:
         return self._pages
@@ -220,43 +200,49 @@ class WhisperPlugin(
     # -------------------------------------------------------------------------
 
     def is_setup_complete(self, vault: "Vault") -> bool:
-        state = vault.plugin_state.get("whisper", {})
+        state = vault.plugin_state.get("castellan", {})
         return state.get("account") is not None and state.get("team") is not None
 
     def get_setup_page(self, vault: "Vault") -> tuple[str, bool]:
-        state = vault.plugin_state.get("whisper", {})
-        if self.is_setup_complete(vault):
-            return ("whisper_issued_credentials", True)
+        cdb = self._app.vault.plugin_state.get("castellan", {}).get("db")
+        settings = cdb.castellan_settings.get(keys=("settings",)) if cdb else None
+        if settings is None or settings.issuer_aid is None:
+            page = self._pages.get("castellan_setup")
+            if page and hasattr(page, "on_show"):
+                page.on_show()
+            return "castellan_setup", False
         else:
-            return ("whisper_placeholder", False)
-
+            return "castellan_issued_credentials", True
 
     # -------------------------------------------------------------------------
     # ESSR management
     # -------------------------------------------------------------------------
 
-    def resetEssr(self, vault: "Vault") -> None:
+    @staticmethod
+    def reset_essr(vault: "Vault") -> None:
         """Reset ESSR client with current account hab."""
-        state = vault.plugin_state.get("whisper", {})
-        account = state.get("account")
-        if account is None:
-            logger.warning("Cannot reset ESSR: no hkAccount configured")
+        state = vault.plugin_state["castellan"]
+        settings = state.get("settings")
+        if settings is None:
+            logger.warning("Cannot reset ESSR: no settings configured")
             return
-        hab = vault.hby.habs.get(account.aid)
+        hab = vault.hby.habs.get(settings.issuer_aid)
         if hab is None:
-            logger.warning(f"Cannot reset ESSR: hab not found for aid {account.aid}")
+            logger.warning(f"Cannot reset ESSR: hab not found for aid {settings.issuer_aid}")
             return
-        whisper_cfg = self._app.config.plugin_configs.get("whisper", {})
+
+        logger.info(f"Resetting ESSR for registrar {settings.registrar_url} to {settings.registrar_aid}")
+
         state["essr"] = APIClient(
-            url=whisper_cfg.get("weirwood_url", "http://localhost:5922"),
-            root=whisper_cfg.get("weirwood_aid", ""),
+            url=settings.registrar_url,
+            root=settings.registrar_aid,
             hby=vault.hby,
             hab=hab
         )
 
 
-class WhisperPlaceholderPage(QWidget):
-    """Placeholder page for Whisper sub-pages (to be implemented later)."""
+class CastellanPlaceholderPage(QWidget):
+    """Placeholder page for castellan sub-pages (to be implemented later)."""
 
     def __init__(self, title: str, parent=None):
         super().__init__(parent)

@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.credentials.issued.upload module
+castellan.credentials.issued.upload module
 
-Dialog for uploading issued credentials to the Weirwood server.
+Dialog for uploading issued credentials to the Castellan server.
 Uses ExtensibleSelectorWidget for multi-select.
 """
 import json
@@ -25,7 +25,7 @@ logger = help.ogler.getLogger(__name__)
 
 
 class UploadIssuedCredentialsDialog(LocksmithDialog):
-    """Dialog for uploading one or more issued credentials to the Weirwood server."""
+    """Dialog for uploading one or more issued credentials to the Castellan server."""
 
     def __init__(
         self,
@@ -42,7 +42,7 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
         self._content_layout.setContentsMargins(0, 10, 0, 0)
         self._content_layout.setSpacing(12)
 
-        instruction = QLabel("Select credentials to upload to the Weirwood server.")
+        instruction = QLabel("Select credentials to upload to the Castellan server.")
         instruction.setStyleSheet("font-size: 13px; color: #636466;")
         instruction.setWordWrap(True)
         self._content_layout.addWidget(instruction)
@@ -86,12 +86,12 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
 
     @qasync.asyncSlot()
     async def _populate_dropdown(self):
-        """Populate the selector with local issued credentials not yet on Weirwood."""
+        """Populate the selector with local issued credentials not yet on Castellan."""
         if not self.app or not self.app.vault or not self.app.vault.rgy:
             return
 
         try:
-            existing_saids = await remoting.fetch_all_weirwood_issued_saids(self.app)
+            existing_saids = await remoting.fetch_all_castellan_issued_saids(self.app)
 
             reger = self.app.vault.rgy.reger
             hby = self.app.vault.hby

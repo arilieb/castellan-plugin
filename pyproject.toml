@@ -6,16 +6,16 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "Whisper"
+name = "CastellanPlugin"
 version = "0.0.1"
-description = "Whisper plugin for Locksmith application to communicate with Weirwood server."
+description = "Castellan plugin for Locksmith application to communicate with Castellan server."
 readme = "README.md"
 requires-python = ">=3.12.9"
 license = { text = "MIT" }
 
 authors = [
-    { name = "Phillip Feairheller", email = "pfeairheller@gmail.com" },
     { name = "Ari Argoud", email = "ariargoud@gmail.com" },
+    { name = "Phillip Feairheller", email = "pfeairheller@gmail.com" },
 ]
 
 keywords = ["healthKERI", "cryptography", "KERI", "ACDC"]
@@ -27,8 +27,14 @@ classifiers = [
 ]
 
 dependencies = [
-#    "locksmith>=0.0.1"
+    "locksmith>=0.0.1",
+    "httpx==0.28.1"
 ]
+
+
+[project.entry-points."locksmith.plugins"]
+castellan = "castellan.plugin:CastellanPlugin"
+
 
 [tool.setuptools.packages.find]
 where = ["src"]

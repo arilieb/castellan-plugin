@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.credentials.publish_all module
+castellan.credentials.publish_all module
 
-Dialog for publishing all local credentials to the Weirwood server in bulk.
+Dialog for publishing all local credentials to the Castellan server in bulk.
 """
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -23,7 +23,7 @@ logger = help.ogler.getLogger(__name__)
 
 
 class PublishAllConfirmationDialog(LocksmithDialog):
-    """Confirmation dialog for bulk-uploading all local credentials to Weirwood."""
+    """Confirmation dialog for bulk-uploading all local credentials to Castellan."""
 
     def __init__(
         self,
@@ -40,7 +40,7 @@ class PublishAllConfirmationDialog(LocksmithDialog):
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(8)
 
-        label = QLabel("Would you like to publish all credentials to Weirwood server?")
+        label = QLabel("Would you like to publish all credentials to Castellan server?")
         label.setStyleSheet("font-size: 13px; color: #636466;")
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -87,8 +87,8 @@ class PublishAllConfirmationDialog(LocksmithDialog):
             hby = self.app.vault.hby
 
             # Fetch already-uploaded SAIDs
-            issued_saids = await remoting.fetch_all_weirwood_issued_saids(self.app)
-            received_saids = await remoting.fetch_all_weirwood_received_saids(self.app)
+            issued_saids = await remoting.fetch_all_castellan_issued_saids(self.app)
+            received_saids = await remoting.fetch_all_castellan_received_saids(self.app)
 
             # Get all local issued credentials
             issued_local_saids = [said for (_, said) in reger.issus.getItemIter()]

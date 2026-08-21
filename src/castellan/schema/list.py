@@ -1,23 +1,22 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.credentials.received.list module
+castellan.schema.list module
 
-Received credentials list page — shows received credentials stored on the Weirwood server.
+Schema list page — shows schemas stored on the Castellan server.
 """
 from typing import Any, TYPE_CHECKING
 
 import qasync
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PySide6.QtGui import QPalette, QColor
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from keri import help
-
 from locksmith.ui import colors
 from locksmith.ui.toolkit.tables import PaginatedTableWidget
 from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithButton, LocksmithInvertedButton
 
-from ...core import remoting
-from .upload import UploadReceivedCredentialsDialog
-from .view import ViewReceivedCredentialDialog
+from ..core import remoting
+from .upload import UploadSchemaDialog
+from .view import ViewSchemaDialog
 
 if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
@@ -25,15 +24,15 @@ if TYPE_CHECKING:
 logger = help.ogler.getLogger(__name__)
 
 
-class ReceivedCredentialsListPage(QWidget):
-    """Paginated list of received credentials stored on the Weirwood server."""
+class SchemaListPage(QWidget):
+    """Paginated list of schemas stored on the Castellan server."""
 
     def __init__(self, app, parent: "VaultPage | None" = None):
         super().__init__(parent)
         self._parent = parent
         self.app = app
         self.vault_name = ""
-        self._credentials_cache: dict[str, dict[str, Any]] = {}
+        self._schema_cache: dict[str, dict[str, Any]] = {}
         self._setup_ui()
 
     def _setup_ui(self):
@@ -47,12 +46,12 @@ class ReceivedCredentialsListPage(QWidget):
         self.setAutoFillBackground(True)
 
         self.table = PaginatedTableWidget(
-            columns=["Schema", "Issuer", "Status", "Received Date"],
-            column_widths={"Schema": 220, "Status": 110, "Received Date": 165, "Actions": 50},
-            title="Received Credentials",
-            icon_path=":/assets/material-icons/in-badge.svg",
+            columns=["Title", "Version", "Created Date"],
+            column_widths={"Version": 200, "Created Date": 185, "Actions": 50},
+            title="Schemas",
+            icon_path=":/assets/material-icons/schema.svg",
             show_add_button=True,
-            add_button_text="Upload Credential(s)",
+            add_button_text="Upload Schema(s)",
             row_actions=["View", "Delete"],
             row_action_icons={
                 "View": ":/assets/material-icons/view.svg",
@@ -61,16 +60,15 @@ class ReceivedCredentialsListPage(QWidget):
             items_per_page=10,
             show_search=True,
             column_sort_mapping={
-                "Schema": "schema",
-                "Issuer": "issuer",
-                "Status": "status",
-                "Received Date": "created_at",
+                "Title": "title",
+                "Version": "version",
+                "Created Date": "created_at",
             },
-            transform_func=self._transform_credential_to_row,
+            transform_func=self._transform_schema_to_row,
             parent=self,
         )
 
-        self.table.add_clicked.connect(self._on_upload_credentials)
+        self.table.add_clicked.connect(self._on_upload_schemas)
         self.table.row_action_triggered.connect(self._on_row_action_signal)
         self.table.row_clicked.connect(self._on_row_clicked)
         self.table.load_requested.connect(self._on_load_requested)
@@ -78,20 +76,20 @@ class ReceivedCredentialsListPage(QWidget):
 
         layout.addWidget(self.table)
 
-    def _transform_credential_to_row(self, credential: dict[str, Any]) -> dict[str, Any]:
-        said = credential.get('said', '')
-        schema = credential.get('schema', {})
-        created_at = credential.get('created_at', '')
+    def _transform_schema_to_row(self, schema: dict[str, Any]) -> dict[str, Any]:
+        said = schema.get('said', '')
+        title = schema.get('title', '')
+        version = schema.get('version', '')
+        created_at = schema.get('created_at', '')
 
         row_data = {
-            'Schema': schema.get('title', ''),
-            'Issuer': credential.get('issuer', ''),
-            'Status': credential.get('status', '').capitalize(),
-            'Received Date': created_at,
+            'Title': title,
+            'Version': version,
+            'Created Date': created_at,
             '_said': said,
         }
 
-        self._credentials_cache[said] = credential
+        self._schema_cache[said] = schema
         return row_data
 
     @qasync.asyncSlot(dict)
@@ -100,29 +98,29 @@ class ReceivedCredentialsListPage(QWidget):
             self.table.load_error.emit("No app instance available")
             return
 
-        self._credentials_cache.clear()
+        self._schema_cache.clear()
 
         try:
-            response = await remoting.fetch_received_credentials(
+            response = await remoting.fetch_schemas(
                 app=self.app,
                 page=params["page"],
                 page_size=params["page_size"],
                 filter_term=params.get("filter_term"),
                 order=params.get("order"),
             )
-            self.table.set_page_data(response, data_key="credentials")
+            self.table.set_page_data(response, data_key="schemas")
         except Exception as e:
-            logger.exception(f"Error loading received credentials: {e}")
+            logger.exception(f"Error loading schemas: {e}")
             self.table.load_error.emit(str(e))
 
     @staticmethod
     def _on_load_error(error_msg: str):
         logger.error(f"Table load error: {error_msg}")
 
-    def _on_upload_credentials(self):
+    def _on_upload_schemas(self):
         if not self.app:
             return
-        dialog = UploadReceivedCredentialsDialog(
+        dialog = UploadSchemaDialog(
             app=self.app,
             on_refresh=self._refresh_table,
             parent=self,
@@ -143,23 +141,23 @@ class ReceivedCredentialsListPage(QWidget):
     def _on_row_action(self, row_data: dict[str, Any], action: str):
         said = row_data.get('_said', '')
         if action == "View":
-            self._view_credential(said)
+            self._view_schema(said)
         elif action == "Delete":
-            self._confirm_delete_credential(said)
+            self._confirm_delete_schema(said)
 
-    def _view_credential(self, said: str):
-        credential = self._credentials_cache.get(said)
-        if not credential:
-            logger.error(f"Credential {said} not in cache")
+    def _view_schema(self, said: str):
+        schema = self._schema_cache.get(said)
+        if not schema:
+            logger.error(f"Schema {said} not in cache")
             return
-        dialog = ViewReceivedCredentialDialog(credential=credential, parent=self)
+        dialog = ViewSchemaDialog(schema=schema, parent=self)
         dialog.show()
 
-    def _confirm_delete_credential(self, said: str):
+    def _confirm_delete_schema(self, said: str):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 10, 0, 0)
-        label = QLabel("Remove this credential from the Weirwood server?")
+        label = QLabel("Remove this schema from the Castellan server?")
         label.setStyleSheet("font-size: 13px;")
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -173,33 +171,33 @@ class ReceivedCredentialsListPage(QWidget):
 
         dialog = LocksmithDialog(
             parent=self,
-            title="Remove Credential",
+            title="Remove Schema",
             title_icon=":/assets/material-icons/delete.svg",
             content=content,
             buttons=button_row,
         )
         no_btn.clicked.connect(dialog.close)
-        yes_btn.clicked.connect(lambda: self._delete_credential(said, dialog))
+        yes_btn.clicked.connect(lambda: self._delete_schema(said, dialog))
         dialog.show()
 
-    def _delete_credential(self, said: str, dialog: LocksmithDialog):
+    def _delete_schema(self, said: str, dialog: LocksmithDialog):
         dialog.close()
-        self._do_delete_credential(said)
+        self._do_delete_schema(said)
 
     @qasync.asyncSlot()
-    async def _do_delete_credential(self, said: str):
+    async def _do_delete_schema(self, said: str):
         try:
-            result = await remoting.delete_received_credential(self.app, said)
+            result = await remoting.delete_schema(self.app, said)
             if result.get('success'):
                 self._refresh_table()
             else:
                 logger.error(f"Delete failed: {result.get('error')}")
         except Exception as e:
-            logger.exception(f"Error deleting credential: {e}")
+            logger.exception(f"Error deleting schema: {e}")
 
     def set_vault_name(self, vault_name: str):
         self.vault_name = vault_name
 
     def on_show(self):
-        self._credentials_cache.clear()
+        self._schema_cache.clear()
         self.table.request_load()

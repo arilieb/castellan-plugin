@@ -1,10 +1,9 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.credentials.issued.list module
+castellan.credentials.received.list module
 
-Issued credentials list page — shows issued credentials stored on the Weirwood server.
+Received credentials list page — shows received credentials stored on the Castellan server.
 """
-import json
 from typing import Any, TYPE_CHECKING
 
 import qasync
@@ -17,8 +16,8 @@ from locksmith.ui.toolkit.tables import PaginatedTableWidget
 from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithButton, LocksmithInvertedButton
 
 from ...core import remoting
-from .upload import UploadIssuedCredentialsDialog
-from .view import ViewIssuedCredentialDialog
+from .upload import UploadReceivedCredentialsDialog
+from .view import ViewReceivedCredentialDialog
 
 if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
@@ -26,8 +25,8 @@ if TYPE_CHECKING:
 logger = help.ogler.getLogger(__name__)
 
 
-class IssuedCredentialsListPage(QWidget):
-    """Paginated list of issued credentials stored on the Weirwood server."""
+class ReceivedCredentialsListPage(QWidget):
+    """Paginated list of received credentials stored on the Castellan server."""
 
     def __init__(self, app, parent: "VaultPage | None" = None):
         super().__init__(parent)
@@ -48,10 +47,10 @@ class IssuedCredentialsListPage(QWidget):
         self.setAutoFillBackground(True)
 
         self.table = PaginatedTableWidget(
-            columns=["Schema", "Recipient", "Status", "Issued Date"],
-            column_widths={"Schema": 220, "Status": 110, "Issued Date": 165, "Actions": 50},
-            title="Issued Credentials",
-            icon_path=":/assets/material-icons/out-badge.svg",
+            columns=["Schema", "Issuer", "Status", "Received Date"],
+            column_widths={"Schema": 220, "Status": 110, "Received Date": 165, "Actions": 50},
+            title="Received Credentials",
+            icon_path=":/assets/material-icons/in-badge.svg",
             show_add_button=True,
             add_button_text="Upload Credential(s)",
             row_actions=["View", "Delete"],
@@ -63,9 +62,9 @@ class IssuedCredentialsListPage(QWidget):
             show_search=True,
             column_sort_mapping={
                 "Schema": "schema",
-                "Recipient": "recipient",
+                "Issuer": "issuer",
                 "Status": "status",
-                "Issued Date": "created_at",
+                "Received Date": "created_at",
             },
             transform_func=self._transform_credential_to_row,
             parent=self,
@@ -86,9 +85,9 @@ class IssuedCredentialsListPage(QWidget):
 
         row_data = {
             'Schema': schema.get('title', ''),
-            'Recipient': credential.get('recipient', ''),
+            'Issuer': credential.get('issuer', ''),
             'Status': credential.get('status', '').capitalize(),
-            'Issued Date': created_at,
+            'Received Date': created_at,
             '_said': said,
         }
 
@@ -104,7 +103,7 @@ class IssuedCredentialsListPage(QWidget):
         self._credentials_cache.clear()
 
         try:
-            response = await remoting.fetch_issued_credentials(
+            response = await remoting.fetch_received_credentials(
                 app=self.app,
                 page=params["page"],
                 page_size=params["page_size"],
@@ -113,7 +112,7 @@ class IssuedCredentialsListPage(QWidget):
             )
             self.table.set_page_data(response, data_key="credentials")
         except Exception as e:
-            logger.exception(f"Error loading issued credentials: {e}")
+            logger.exception(f"Error loading received credentials: {e}")
             self.table.load_error.emit(str(e))
 
     @staticmethod
@@ -123,7 +122,7 @@ class IssuedCredentialsListPage(QWidget):
     def _on_upload_credentials(self):
         if not self.app:
             return
-        dialog = UploadIssuedCredentialsDialog(
+        dialog = UploadReceivedCredentialsDialog(
             app=self.app,
             on_refresh=self._refresh_table,
             parent=self,
@@ -153,14 +152,14 @@ class IssuedCredentialsListPage(QWidget):
         if not credential:
             logger.error(f"Credential {said} not in cache")
             return
-        dialog = ViewIssuedCredentialDialog(credential=credential, parent=self)
+        dialog = ViewReceivedCredentialDialog(credential=credential, parent=self)
         dialog.show()
 
     def _confirm_delete_credential(self, said: str):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 10, 0, 0)
-        label = QLabel("Remove this credential from the Weirwood server?")
+        label = QLabel("Remove this credential from the Castellan server?")
         label.setStyleSheet("font-size: 13px;")
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -190,7 +189,7 @@ class IssuedCredentialsListPage(QWidget):
     @qasync.asyncSlot()
     async def _do_delete_credential(self, said: str):
         try:
-            result = await remoting.delete_issued_credential(self.app, said)
+            result = await remoting.delete_received_credential(self.app, said)
             if result.get('success'):
                 self._refresh_table()
             else:

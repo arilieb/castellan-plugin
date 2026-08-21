@@ -1,10 +1,11 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.credentials.received.upload module
+castellan.schema.upload module
 
-Dialog for uploading received credentials to the Weirwood server.
+Dialog for uploading schemas to the Castellan server.
 Uses ExtensibleSelectorWidget for multi-select.
 """
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -14,7 +15,7 @@ from keri import help
 
 from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithButton, LocksmithInvertedButton
 from locksmith.ui.toolkit.widgets.extensible import ExtensibleSelectorWidget
-from ...core import remoting
+from ..core import remoting
 
 if TYPE_CHECKING:
     from locksmith.core.apping import LocksmithApplication
@@ -23,14 +24,14 @@ if TYPE_CHECKING:
 logger = help.ogler.getLogger(__name__)
 
 
-class UploadReceivedCredentialsDialog(LocksmithDialog):
-    """Dialog for uploading one or more received credentials to the Weirwood server."""
+class UploadSchemaDialog(LocksmithDialog):
+    """Dialog for uploading one or more schemas to the Castellan server."""
 
     def __init__(
-            self,
-            app: "LocksmithApplication",
-            on_refresh: Callable[[], None] | None = None,
-            parent: "VaultPage | None" = None,
+        self,
+        app: "LocksmithApplication",
+        on_refresh: Callable[[], None] | None = None,
+        parent: "VaultPage | None" = None,
     ):
         self.app = app
         self.on_refresh = on_refresh
@@ -41,18 +42,18 @@ class UploadReceivedCredentialsDialog(LocksmithDialog):
         self._content_layout.setContentsMargins(0, 10, 0, 0)
         self._content_layout.setSpacing(12)
 
-        instruction = QLabel("Select credentials to upload to the Weirwood server.")
+        instruction = QLabel("Select schemas to upload to the Castellan server.")
         instruction.setStyleSheet("font-size: 13px; color: #636466;")
         instruction.setWordWrap(True)
         self._content_layout.addWidget(instruction)
 
-        self.credential_selector = ExtensibleSelectorWidget(
-            dropdown_label="Select Credential",
+        self.schema_selector = ExtensibleSelectorWidget(
+            dropdown_label="Select Schema",
             selector_dropdown_items=[],
             max_scrollable_height=200,
         )
-        self.credential_selector.setFixedWidth(450)
-        self._content_layout.addWidget(self.credential_selector)
+        self.schema_selector.setFixedWidth(450)
+        self._content_layout.addWidget(self.schema_selector)
         self._content_layout.addStretch()
 
         button_row = QHBoxLayout()
@@ -65,8 +66,8 @@ class UploadReceivedCredentialsDialog(LocksmithDialog):
 
         super().__init__(
             parent=parent,
-            title="Upload Received Credentials",
-            title_icon=":/assets/material-icons/in-badge.svg",
+            title="Upload Schemas",
+            title_icon=":/assets/material-icons/schema.svg",
             content=content_widget,
             buttons=button_row,
         )
@@ -81,70 +82,65 @@ class UploadReceivedCredentialsDialog(LocksmithDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.credential_selector.set_dialog(self)
+        self.schema_selector.set_dialog(self)
 
     @qasync.asyncSlot()
     async def _populate_dropdown(self):
-        """Populate the selector with local received credentials not yet on Weirwood."""
+        """Populate the selector with local schemas not yet on Castellan."""
         if not self.app or not self.app.vault or not self.app.vault.rgy:
             return
 
         try:
-            existing_saids = await remoting.fetch_all_weirwood_received_saids(self.app)
+            existing_saids = await remoting.fetch_all_castellan_schema_saids(self.app)
 
             reger = self.app.vault.rgy.reger
-            hby = self.app.vault.hby
-            saids = list()
-            for pre in self.app.vault.hby.habs.keys():
-                saids.extend([saider for saider in self.app.vault.rgy.reger.subjs.get(keys=(pre,))])
-            creds = reger.cloneCreds(saids, hby.db)
+            schema_saids = [said for (_, said) in reger.schms.getItemIter()]
 
             items = []
-            for cred in creds:
-                sad = cred['sad']
-                cred_said = sad['d']
-
-                if cred_said in existing_saids:
+            for schema_said in schema_saids:
+                if schema_said in existing_saids:
                     continue
 
-                schema = cred.get('schema', {})
+                schema = reger.schms.get(keys=(schema_said,))
                 if not schema:
                     continue
 
-                schema_title = schema.get('title', 'Unknown Schema')
-                issuer = sad.get('i', '')
-                subject = sad.get('a', {})
-                holder = subject.get('i', '') if isinstance(subject, dict) else ''
-                issuer_display = issuer[:15] + '...' if len(issuer) > 15 else issuer
+                try:
+                    sad = json.loads(bytes(schema))
+                except Exception as e:
+                    logger.warning(f"Failed to parse schema {schema_said}: {e}")
+                    continue
 
-                display_text = f"{schema_title} - {issuer_display} ({cred_said[:12]}...)"
+                title = sad.get('title', 'Untitled Schema')
+                version = sad.get('version', '1.0.0')
+                description = sad.get('description', '')
+
+                display_text = f"{title} v{version}"
                 items.append((display_text, {
-                    'said': cred_said,
-                    'schema': schema,
-                    'issuer': issuer,
-                    'holder': holder,
-                    'iss_hol': f"Issuer/Holder: {issuer[:10]}... / {holder[:10]}...",
-                    'schema_title': schema_title
+                    'said': schema_said,
+                    'title': title,
+                    'version': version,
+                    'description': description,
+                    'sad': sad,
                 }))
 
             if items:
-                self.credential_selector._populate_dropdown(items)
+                self.schema_selector._populate_dropdown(items)
             else:
-                self.credential_selector.selector_dropdown.setPlaceholderText("No credentials Available")
+                self.schema_selector.selector_dropdown.setPlaceholderText("No schemas available to upload")
                 self.upload_btn.setEnabled(False)
-
 
         except Exception as e:
             logger.exception(f"Error populating upload dropdown: {e}")
-            self.show_error(f"Error loading credentials: {e}")
+            self.show_error(f"Error loading schemas: {e}")
 
     def _on_upload(self):
         if self._is_uploading:
             return
 
-        selected = self.credential_selector.get_selected_items()
+        selected = self.schema_selector.get_selected_items()
         if not selected:
-            self.show_error("Select at least one credential to upload.")
+            self.show_error("Select at least one schema to upload.")
             return
 
         self._is_uploading = True
@@ -160,15 +156,16 @@ class UploadReceivedCredentialsDialog(LocksmithDialog):
             for _text, data in selected:
                 if data is None:
                     continue
-                result = await remoting.upload_received_credential(
+                result = await remoting.upload_schema(
                     app=self.app,
-                    credential_said=data['said'],
-                    schema=data['schema'],
-                    issuer=data['issuer'],
-                    holder=data['holder'],
+                    schema_said=data['said'],
+                    title=data['title'],
+                    version=data['version'],
+                    description=data['description'],
+                    sad=data['sad'],
                 )
                 if not result.get('success'):
-                    errors.append(f"{data['said'][:12]}...: {result.get('error', 'Unknown error')}")
+                    errors.append(f"{data['title']}: {result.get('error', 'Unknown error')}")
 
             if errors:
                 self.show_error("Some uploads failed:\n" + "\n".join(errors))

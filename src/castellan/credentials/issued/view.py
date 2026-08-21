@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.credentials.received.view module
+castellan.credentials.issued.view module
 
-Dialog for viewing a received credential stored on the Weirwood server.
+Dialog for viewing an issued credential stored on the Castellan server.
 """
 import json
 from typing import TYPE_CHECKING
@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 logger = help.ogler.getLogger(__name__)
 
 
-class ViewReceivedCredentialDialog(LocksmithDialog):
-    """Read-only dialog displaying all fields of a received credential from Weirwood."""
+class ViewIssuedCredentialDialog(LocksmithDialog):
+    """Read-only dialog displaying all fields of an issued credential from Castellan."""
 
     def __init__(self, credential: dict, parent: "VaultPage | None" = None):
         content_widget = QWidget()
@@ -36,9 +36,9 @@ class ViewReceivedCredentialDialog(LocksmithDialog):
         self._add_field_row(layout, "SAID", said, monospace=True, copyable=True)
         self._add_field_row(layout, "Schema", schema.get('title', ''))
         self._add_field_row(layout, "Issuer", credential.get('issuer', ''), monospace=True)
-        self._add_field_row(layout, "Holder", credential.get('holder', ''), monospace=True)
+        self._add_field_row(layout, "Recipient", credential.get('recipient', ''), monospace=True)
         self._add_field_row(layout, "Status", credential.get('status', '').capitalize())
-        self._add_field_row(layout, "Received Date", credential.get('created_at', ''))
+        self._add_field_row(layout, "Issued Date", credential.get('created_at', ''))
 
         sad_label = QLabel("SAD")
         sad_label.setStyleSheet("font-weight: bold; font-size: 13px;")
@@ -56,8 +56,8 @@ class ViewReceivedCredentialDialog(LocksmithDialog):
 
         super().__init__(
             parent=parent,
-            title="Received Credential",
-            title_icon=":/assets/material-icons/in-badge.svg",
+            title="Issued Credential",
+            title_icon=":/assets/material-icons/out-badge.svg",
             content=content_widget,
             buttons=button_row,
         )

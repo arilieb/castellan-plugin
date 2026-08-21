@@ -2,7 +2,7 @@
 Locksmith plugin intended for managing Weirwood server credentials
 
 ## Setup
-Copy the `src/whisper` dir from this repo into the `src/locksmith/plugins` dir in the locksmith repo.
+Copy the `src/castellan` dir from this repo into the `src/locksmith/plugins` dir in the locksmith repo.
 
 Add the following line to the `[project.entry-points."locksmith.plugins"]` section in `pyproject.toml` in the locksmith 
 repo. In its current state, this plugin will not function without the healthKERI plugin shown below.

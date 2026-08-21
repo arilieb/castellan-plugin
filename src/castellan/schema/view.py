@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-whisper.credentials.issued.view module
+castellan.schema.view module
 
-Dialog for viewing an issued credential stored on the Weirwood server.
+Dialog for viewing a schema stored on the Castellan server.
 """
 import json
 from typing import TYPE_CHECKING
@@ -20,34 +20,37 @@ if TYPE_CHECKING:
 logger = help.ogler.getLogger(__name__)
 
 
-class ViewIssuedCredentialDialog(LocksmithDialog):
-    """Read-only dialog displaying all fields of an issued credential from Weirwood."""
+class ViewSchemaDialog(LocksmithDialog):
+    """Read-only dialog displaying all fields of a schema from Castellan."""
 
-    def __init__(self, credential: dict, parent: "VaultPage | None" = None):
+    def __init__(self, schema: dict, parent: "VaultPage | None" = None):
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(12)
 
-        said = credential.get('said', '')
-        schema = credential.get('schema', {})
-        sad = credential.get('sad', {})
+        said = schema.get('said', '')
+        title = schema.get('title', '')
+        version = schema.get('version', '')
+        description = schema.get('description', '')
+        created_at = schema.get('created_at', '')
+        sad = schema.get('sad', {})
 
         self._add_field_row(layout, "SAID", said, monospace=True, copyable=True)
-        self._add_field_row(layout, "Schema", schema.get('title', ''))
-        self._add_field_row(layout, "Issuer", credential.get('issuer', ''), monospace=True)
-        self._add_field_row(layout, "Recipient", credential.get('recipient', ''), monospace=True)
-        self._add_field_row(layout, "Status", credential.get('status', '').capitalize())
-        self._add_field_row(layout, "Issued Date", credential.get('created_at', ''))
+        self._add_field_row(layout, "Title", title)
+        self._add_field_row(layout, "Version", version)
+        if description:
+            self._add_field_row(layout, "Description", description)
+        self._add_field_row(layout, "Created Date", created_at)
 
-        sad_label = QLabel("SAD")
+        sad_label = QLabel("Schema Definition (SAD)")
         sad_label.setStyleSheet("font-weight: bold; font-size: 13px;")
         layout.addWidget(sad_label)
 
         sad_field = LocksmithPlainTextEdit()
         sad_field.setPlainText(json.dumps(sad, indent=2))
         sad_field.setReadOnly(True)
-        sad_field.setMinimumHeight(160)
+        sad_field.setMinimumHeight(200)
         layout.addWidget(sad_field)
 
         button_row = QHBoxLayout()
@@ -56,8 +59,8 @@ class ViewIssuedCredentialDialog(LocksmithDialog):
 
         super().__init__(
             parent=parent,
-            title="Issued Credential",
-            title_icon=":/assets/material-icons/out-badge.svg",
+            title="Schema",
+            title_icon=":/assets/material-icons/schema.svg",
             content=content_widget,
             buttons=button_row,
         )
