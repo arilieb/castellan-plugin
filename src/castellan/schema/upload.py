@@ -92,25 +92,15 @@ class UploadSchemaDialog(LocksmithDialog):
 
         try:
             existing_saids = await remoting.fetch_all_castellan_schema_saids(self.app)
+            print(f"EXSITING SAIDS {existing_saids}")
 
-            reger = self.app.vault.rgy.reger
-            schema_saids = [said for (_, said) in reger.schms.getItemIter()]
 
             items = []
-            for schema_said in schema_saids:
+            for (schema_said,), schemer in self.app.vault.hby.db.schema.getItemIter():
                 if schema_said in existing_saids:
                     continue
 
-                schema = reger.schms.get(keys=(schema_said,))
-                if not schema:
-                    continue
-
-                try:
-                    sad = json.loads(bytes(schema))
-                except Exception as e:
-                    logger.warning(f"Failed to parse schema {schema_said}: {e}")
-                    continue
-
+                sad = schemer.sed
                 title = sad.get('title', 'Untitled Schema')
                 version = sad.get('version', '1.0.0')
                 description = sad.get('description', '')
@@ -159,9 +149,6 @@ class UploadSchemaDialog(LocksmithDialog):
                 result = await remoting.upload_schema(
                     app=self.app,
                     schema_said=data['said'],
-                    title=data['title'],
-                    version=data['version'],
-                    description=data['description'],
                     sad=data['sad'],
                 )
                 if not result.get('success'):

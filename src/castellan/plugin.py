@@ -201,7 +201,7 @@ class CastellanPlugin(
 
     def is_setup_complete(self, vault: "Vault") -> bool:
         state = vault.plugin_state.get("castellan", {})
-        return state.get("account") is not None and state.get("team") is not None
+        return state.get("settings") is not None
 
     def get_setup_page(self, vault: "Vault") -> tuple[str, bool]:
         cdb = self._app.vault.plugin_state.get("castellan", {}).get("db")
@@ -212,7 +212,7 @@ class CastellanPlugin(
                 page.on_show()
             return "castellan_setup", False
         else:
-            return "castellan_issued_credentials", True
+            return "castellan_schema", True
 
     # -------------------------------------------------------------------------
     # ESSR management

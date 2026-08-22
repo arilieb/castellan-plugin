@@ -4,15 +4,16 @@ castellan.schema.list module
 
 Schema list page — shows schemas stored on the Castellan server.
 """
+import json
 from typing import Any, TYPE_CHECKING
 
 import qasync
 from PySide6.QtGui import QPalette, QColor
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QWidget, QVBoxLayout
 from keri import help
+from keri.help import helping
 from locksmith.ui import colors
 from locksmith.ui.toolkit.tables import PaginatedTableWidget
-from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithButton, LocksmithInvertedButton
 
 from ..core import remoting
 from .upload import UploadSchemaDialog
@@ -76,11 +77,13 @@ class SchemaListPage(QWidget):
 
         layout.addWidget(self.table)
 
-    def _transform_schema_to_row(self, schema: dict[str, Any]) -> dict[str, Any]:
-        said = schema.get('said', '')
+    def _transform_schema_to_row(self, data: dict[str, Any]) -> dict[str, Any]:
+        schema = data['schema']
+        said = data.get('said', '')
         title = schema.get('title', '')
         version = schema.get('version', '')
-        created_at = schema.get('created_at', '')
+        created_at_date = helping.fromIso8601(data.get('created_at', ''))
+        created_at = created_at_date.strftime('%Y-%m-%d %H:%M:%S')
 
         row_data = {
             'Title': title,
@@ -120,6 +123,7 @@ class SchemaListPage(QWidget):
     def _on_upload_schemas(self):
         if not self.app:
             return
+
         dialog = UploadSchemaDialog(
             app=self.app,
             on_refresh=self._refresh_table,
@@ -143,7 +147,7 @@ class SchemaListPage(QWidget):
         if action == "View":
             self._view_schema(said)
         elif action == "Delete":
-            self._confirm_delete_schema(said)
+            self._on_delete_schema(row_data)
 
     def _view_schema(self, said: str):
         schema = self._schema_cache.get(said)
@@ -153,47 +157,36 @@ class SchemaListPage(QWidget):
         dialog = ViewSchemaDialog(schema=schema, parent=self)
         dialog.show()
 
-    def _confirm_delete_schema(self, said: str):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 10, 0, 0)
-        label = QLabel("Remove this schema from the Castellan server?")
-        label.setStyleSheet("font-size: 13px;")
-        label.setWordWrap(True)
-        layout.addWidget(label)
+    def _on_delete_schema(self, row_data: dict[str, Any]) -> None:
+        """Handle Delete schema action."""
+        from .delete import DeleteSchemaDialog
 
-        button_row = QHBoxLayout()
-        button_row.addStretch()
-        no_btn = LocksmithInvertedButton("No")
-        yes_btn = LocksmithButton("Yes")
-        button_row.addWidget(no_btn)
-        button_row.addWidget(yes_btn)
+        schema_said = row_data.get("_said", "")
+        schema_title = row_data.get("Title", "")
 
-        dialog = LocksmithDialog(
-            parent=self,
-            title="Remove Schema",
-            title_icon=":/assets/material-icons/delete.svg",
-            content=content,
-            buttons=button_row,
+        if not schema_said:
+            logger.error("Cannot delete: no schema SAID found")
+            return
+
+        if not schema_title:
+            # Fallback to SAID prefix if title is missing
+            schema_title = schema_said[:12]
+
+        logger.info(f"Opening delete dialog for schema: {schema_title}")
+
+        dialog = DeleteSchemaDialog(
+            app=self.app,
+            schema_title=schema_title,
+            schema_said=schema_said,
+            on_success=self._on_schema_deleted,
+            parent=self._parent
         )
-        no_btn.clicked.connect(dialog.close)
-        yes_btn.clicked.connect(lambda: self._delete_schema(said, dialog))
-        dialog.show()
+        dialog.open()
 
-    def _delete_schema(self, said: str, dialog: LocksmithDialog):
-        dialog.close()
-        self._do_delete_schema(said)
-
-    @qasync.asyncSlot()
-    async def _do_delete_schema(self, said: str):
-        try:
-            result = await remoting.delete_schema(self.app, said)
-            if result.get('success'):
-                self._refresh_table()
-            else:
-                logger.error(f"Delete failed: {result.get('error')}")
-        except Exception as e:
-            logger.exception(f"Error deleting schema: {e}")
+    def _on_schema_deleted(self, schema_said: str):
+        """Handle successful schema deletion."""
+        logger.info(f"Schema {schema_said} deleted, reloading list")
+        self.on_show()  # Refresh the schemas list
 
     def set_vault_name(self, vault_name: str):
         self.vault_name = vault_name

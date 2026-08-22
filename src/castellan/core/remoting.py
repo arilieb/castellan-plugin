@@ -8,6 +8,7 @@ import json
 import urllib.parse
 from typing import TYPE_CHECKING, Dict, Any, Optional
 
+from keri.core.scheming import Schemer
 from locksmith.core.credentialing import outputCred, escape_keys
 
 if TYPE_CHECKING:
@@ -233,9 +234,6 @@ async def fetch_all_castellan_schema_saids(app: "LocksmithApplication") -> set:
 async def upload_schema(
     app: "LocksmithApplication",
     schema_said: str,
-    title: str,
-    version: str,
-    description: str,
     sad: dict,
 ) -> Dict[str, Any]:
     """Upload a schema to the Castellan server."""
@@ -247,24 +245,14 @@ async def upload_schema(
         return {'success': False, 'error': 'No local vault open'}
 
     try:
-        reger = app.vault.rgy.reger
-
         # Retrieve schema bytes from registry
-        schema_bytes = reger.schms.get(keys=(schema_said,))
+        schemer = Schemer(sed=sad)
+        schema_bytes = schemer.raw
         if not schema_bytes:
             return {'success': False, 'error': f'No schema data for {schema_said}'}
 
-        doc = {
-            'said': schema_said,
-            'title': title,
-            'version': version,
-            'description': description,
-            'sad': escape_keys(sad),
-        }
-
         files = {
-            'schema': ('schema.json', bytes(schema_bytes), 'application/json'),
-            'doc': ('data.json', json.dumps(doc), 'application/json'),
+            'schema': ('schema.json', bytes(schema_bytes), 'application/json')
         }
 
         response = await essr.request(
