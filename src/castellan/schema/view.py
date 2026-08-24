@@ -29,7 +29,7 @@ class ViewSchemaDialog(LocksmithDialog):
         layout.setContentsMargins(0, 10, 0, 0)
         layout.setSpacing(12)
 
-        said = schema.get('said', '')
+        said = schema.get('$id', '')
         title = schema.get('title', '')
         version = schema.get('version', '')
         description = schema.get('description', '')

@@ -53,8 +53,6 @@ async def fetch_issued_credentials(
         path = f"/issued-credentials?{'&'.join(params)}"
         response = await essr.request(path=path, method="GET")
 
-        print(response.status_code)
-        print(response.text)
         if response is not None and response.status_code == 200:
             data = response.json()
             data['success'] = True
@@ -92,8 +90,22 @@ async def upload_issued_credential(
     schema: dict,
     issuer: str,
     recipient: str,
+    dynamic_field_data: list | None = None,
 ) -> Dict[str, Any]:
-    """Upload an issued credential to the Castellan server."""
+    """
+    Upload an issued credential to the Castellan server.
+
+    Args:
+        app: The Locksmith application instance
+        credential_said: The SAID of the credential to upload
+        schema: The credential schema
+        issuer: The issuer AID
+        recipient: The recipient AID
+        dynamic_field_data: Optional metadata list (e.g., dynamic fields) to include with the credential
+
+    Returns:
+        Dict with 'success' boolean and optional 'error' or 'data' keys
+    """
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}
@@ -111,6 +123,10 @@ async def upload_issued_credential(
             'recipient': recipient,
             'schema': escape_keys(schema),
         }
+
+        # Add metadata if provided
+        if dynamic_field_data:
+            doc['dynamic_fields'] = dynamic_field_data
 
         acdc = outputCred(hby, rgy, credential_said)
         if not acdc:
@@ -143,6 +159,56 @@ async def upload_issued_credential(
 
     except Exception as e:
         logger.error(f"Error uploading issued credential: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def update_issued_credential_metadata(
+    app: "LocksmithApplication",
+    credential_said: str,
+    dynamic_field_data: list | None = None,
+) -> Dict[str, Any]:
+    """
+    Update the metadata (dynamic fields) of an issued credential on the Castellan server.
+
+    Args:
+        app: The Locksmith application instance
+        credential_said: The SAID of the credential to update
+        dynamic_field_data: Updated dynamic fields list
+
+    Returns:
+        Dict with 'success' boolean and optional 'error' or 'data' keys
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        body = {
+            'dynamic_fields': dynamic_field_data or []
+        }
+
+        response = await essr.request(
+            path=f"/issued-credentials/{urllib.parse.quote(credential_said, safe='')}",
+            method="PATCH",
+            json=body,
+            timeout=30,
+        )
+
+        if response and response.status_code in (200, 204):
+            return {'success': True, 'data': response.json() if response.content else {}}
+        else:
+            if response is not None:
+                logger.error(f"Update failed with status {response.status_code}: {response.text}")
+                try:
+                    error_msg = response.json().get('description', f"Status {response.status_code}")
+                except Exception:
+                    error_msg = f"Status {response.status_code}"
+            else:
+                error_msg = "No response"
+            return {'success': False, 'error': error_msg}
+
+    except Exception as e:
+        logger.error(f"Error updating issued credential metadata: {e}")
         return {'success': False, 'error': str(e)}
 
 

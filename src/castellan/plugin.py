@@ -19,7 +19,7 @@ from locksmith.plugins.base import (
     AccountProviderPlugin,
 )
 from locksmith.ui.vault.menu import MenuButton
-from locksmith.ui.toolkit.widgets.buttons import BackButton, LocksmithButton
+from locksmith.ui.toolkit.widgets.buttons import BackButton
 
 from .db.basing import CastellanBaser
 
@@ -105,16 +105,13 @@ class CastellanPlugin(
         back_button = BackButton(dark_mode=False)
         items.append(back_button)
 
-        publish_all_btn = self._create_publish_all_button()
-        items.append(publish_all_btn)
-
         from locksmith.ui.vault.menu import MenuSpacer
-        items.append(MenuSpacer(15))
+        items.append(MenuSpacer(10))
 
         nav_buttons_config = [
-            (":/assets/material-icons/schema.svg", "Schema", "castellan_schema"),
             (":/assets/material-icons/badge_outgoing.svg", "Issued Credentials", "castellan_issued_credentials"),
             (":/assets/material-icons/badge_incoming.svg", "Received Credentials", "castellan_received_credentials"),
+            (":/assets/material-icons/schema.svg", "Schema", "castellan_schema"),
         ]
 
         self._nav_buttons_by_page = {}
@@ -125,20 +122,6 @@ class CastellanPlugin(
             self._nav_buttons_by_page[page_key] = btn
 
         return items
-
-    def _create_publish_all_button(self) -> LocksmithButton:
-        btn = LocksmithButton("Publish All")
-        btn.clicked.connect(self._on_publish_all_clicked)
-        return btn
-
-    def _on_publish_all_clicked(self):
-        from .credentials.publish_all import PublishAllConfirmationDialog
-        dialog = PublishAllConfirmationDialog(
-            app=self._app,
-            on_refresh=self._refresh_credential_pages,
-            parent=self._get_vault_page(),
-        )
-        dialog.open()
 
     def _refresh_credential_pages(self):
         for key in ("castellan_issued_credentials", "castellan_received_credentials"):

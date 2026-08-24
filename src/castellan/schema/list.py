@@ -83,7 +83,7 @@ class SchemaListPage(QWidget):
         title = schema.get('title', '')
         version = schema.get('version', '')
         created_at_date = helping.fromIso8601(data.get('created_at', ''))
-        created_at = created_at_date.strftime('%Y-%m-%d %H:%M:%S')
+        created_at = created_at_date.strftime("%b %d, %Y %I:%M %p")
 
         row_data = {
             'Title': title,
@@ -154,6 +154,8 @@ class SchemaListPage(QWidget):
         if not schema:
             logger.error(f"Schema {said} not in cache")
             return
+
+        logger.info(f"Opening view dialog for schema: {schema}")
         dialog = ViewSchemaDialog(schema=schema, parent=self)
         dialog.show()
 
