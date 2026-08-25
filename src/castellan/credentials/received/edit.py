@@ -1,8 +1,8 @@
 # -*- encoding: utf-8 -*-
 """
-castellan.credentials.issued.edit module
+castellan.credentials.received.edit module
 
-Dialog for editing dynamic fields of an issued credential on the Castellan server.
+Dialog for editing dynamic fields of a received credential on the Castellan server.
 """
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -69,8 +69,8 @@ class DynamicFieldWidget(QWidget):
         return self.field_component.value()
 
 
-class EditIssuedCredentialDialog(LocksmithDialog):
-    """Dialog for editing dynamic fields of an issued credential."""
+class EditReceivedCredentialDialog(LocksmithDialog):
+    """Dialog for editing dynamic fields of a received credential."""
 
     def __init__(
         self,
@@ -116,14 +116,14 @@ class EditIssuedCredentialDialog(LocksmithDialog):
 
         super().__init__(
             parent=parent,
-            title="Edit Issued Credential",
+            title="Edit Received Credential",
             title_icon=":/assets/material-icons/edit.svg",
             content=content_widget,
             buttons=button_row,
         )
 
         # Set fixed width only, allow height to be dynamic
-        self.setFixedWidth(530)
+        self.setFixedWidth(700)
         self.setMinimumHeight(400)  # Minimum viable height
         self.setMaximumHeight(950)  # Cap at 950px as before
         self._adjust_dialog_height()
@@ -162,16 +162,11 @@ class EditIssuedCredentialDialog(LocksmithDialog):
         schema_row.addStretch()
         info_layout.addLayout(schema_row)
 
-        # Issuer
+        # Issuer (remote)
         issuer_pre = credential['sad']['i']
         issuer_alias = None
-        try:
-            for hab_pre, hab in self.app.vault.hby.habs.items():
-                if hab.pre == issuer_pre:
-                    issuer_alias = hab.name
-                    break
-        except:
-            pass
+        if (remote_id := self.org.get(issuer_pre)) is not None:
+            issuer_alias = f'{remote_id["alias"]}'
 
         issuer_label = QLabel("Issuer")
         issuer_label.setStyleSheet("font-weight: bold; font-size: 14px; border: none; margin-top: 10px;")
@@ -206,45 +201,49 @@ class EditIssuedCredentialDialog(LocksmithDialog):
 
         info_layout.addWidget(issuer_container)
 
-        # Recipient
-        recp = credential.get('recipient', '')
-        recipient_pre = credential['sad']['a']['i']
-        recipient_alias = None
-        if (remote_id := self.org.get(recp)) is not None:
-            recipient_alias = f'{remote_id['alias']}'
+        # Holder (local)
+        holder = credential.get('holder', '')
+        holder_alias = None
+        try:
+            for hab_pre, hab in self.app.vault.hby.habs.items():
+                if hab.pre == holder:
+                    holder_alias = hab.name
+                    break
+        except:
+            pass
 
-        recipient_label = QLabel("Recipient")
-        recipient_label.setStyleSheet("font-weight: bold; font-size: 14px; border: none; margin-top: 10px;")
-        info_layout.addWidget(recipient_label)
+        holder_label = QLabel("Holder")
+        holder_label.setStyleSheet("font-weight: bold; font-size: 14px; border: none; margin-top: 10px;")
+        info_layout.addWidget(holder_label)
 
-        recipient_container = QWidget()
-        recipient_container.setStyleSheet("border: none;")
-        recipient_inner_layout = QVBoxLayout(recipient_container)
-        recipient_inner_layout.setContentsMargins(20, 0, 0, 0)
-        recipient_inner_layout.setSpacing(5)
+        holder_container = QWidget()
+        holder_container.setStyleSheet("border: none;")
+        holder_inner_layout = QVBoxLayout(holder_container)
+        holder_inner_layout.setContentsMargins(20, 0, 0, 0)
+        holder_inner_layout.setSpacing(5)
 
-        recipient_alias_row = QHBoxLayout()
-        recipient_alias_label = QLabel("Alias:")
-        recipient_alias_label.setStyleSheet("font-weight: 500; font-size: 13px; border: none;")
-        recipient_alias_row.addWidget(recipient_alias_label)
-        recipient_alias_value = QLabel(recipient_alias if recipient_alias else "N/A")
-        recipient_alias_value.setStyleSheet("font-size: 13px; border: none;")
-        recipient_alias_row.addWidget(recipient_alias_value)
-        recipient_alias_row.addStretch()
-        recipient_inner_layout.addLayout(recipient_alias_row)
+        holder_alias_row = QHBoxLayout()
+        holder_alias_label = QLabel("Alias:")
+        holder_alias_label.setStyleSheet("font-weight: 500; font-size: 13px; border: none;")
+        holder_alias_row.addWidget(holder_alias_label)
+        holder_alias_value = QLabel(holder_alias if holder_alias else "N/A")
+        holder_alias_value.setStyleSheet("font-size: 13px; border: none;")
+        holder_alias_row.addWidget(holder_alias_value)
+        holder_alias_row.addStretch()
+        holder_inner_layout.addLayout(holder_alias_row)
 
-        recipient_aid_row = QHBoxLayout()
-        recipient_aid_label = QLabel("AID:")
-        recipient_aid_label.setStyleSheet("font-weight: 500; font-size: 13px; border: none;")
-        recipient_aid_row.addWidget(recipient_aid_label)
-        recipient_aid_value = QLabel(recipient_pre)
-        recipient_aid_value.setStyleSheet("font-size: 13px; border: none;")
-        recipient_aid_value.setWordWrap(True)
-        recipient_aid_row.addWidget(recipient_aid_value)
-        recipient_aid_row.addStretch()
-        recipient_inner_layout.addLayout(recipient_aid_row)
+        holder_aid_row = QHBoxLayout()
+        holder_aid_label = QLabel("AID:")
+        holder_aid_label.setStyleSheet("font-weight: 500; font-size: 13px; border: none;")
+        holder_aid_row.addWidget(holder_aid_label)
+        holder_aid_value = QLabel(holder)
+        holder_aid_value.setStyleSheet("font-size: 13px; border: none;")
+        holder_aid_value.setWordWrap(True)
+        holder_aid_row.addWidget(holder_aid_value)
+        holder_aid_row.addStretch()
+        holder_inner_layout.addLayout(holder_aid_row)
 
-        info_layout.addWidget(recipient_container)
+        info_layout.addWidget(holder_container)
 
         # Status
         status_text = credential.get("status", {})
@@ -260,11 +259,11 @@ class EditIssuedCredentialDialog(LocksmithDialog):
         status_row.addStretch()
         info_layout.addLayout(status_row)
 
-        # Issued Date
+        # Received Date
         dt = helping.fromIso8601(credential.get('created_at', ''))
 
         date_row = QHBoxLayout()
-        date_label = QLabel("Issued Date:")
+        date_label = QLabel("Received Date:")
         date_label.setStyleSheet("font-weight: 500; font-size: 13px; border: none;")
         date_row.addWidget(date_label)
 
@@ -522,7 +521,7 @@ class EditIssuedCredentialDialog(LocksmithDialog):
                 dynamic_field_data.append(field_data)
 
             # Call update API
-            result = await remoting.update_issued_credential_metadata(
+            result = await remoting.update_received_credential_metadata(
                 app=self.app,
                 credential_said=self.credential.get('said', ''),
                 dynamic_field_data=dynamic_field_data,

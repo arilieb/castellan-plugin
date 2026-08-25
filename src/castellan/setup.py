@@ -180,21 +180,21 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         layout.setContentsMargins(0, 0, 0, 0)
         self.content_layout.addLayout(layout)
 
-        header = QLabel("Issuer")
+        header = QLabel("Castellan Account Identifier")
         header.setStyleSheet("font-weight: 600; font-size: 16px;")
         layout.addWidget(header)
         layout.addSpacing(8)
 
         hint = QLabel(
-            "Select the Identifier to use as your KERIGuard credential issuer."
+            "Select the Identifier to use to authenticate with Castellan."
         )
         hint.setStyleSheet(f"color: {colors.TEXT_SUBTLE}; font-size: 13px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         layout.addSpacing(10)
 
-        self._issuer_dropdown = FloatingLabelComboBox("Select credential issuer identifier")
-        self._issuer_dropdown.setFixedWidth(420)
+        self._issuer_dropdown = FloatingLabelComboBox("Select Castellan identifier")
+        self._issuer_dropdown.setFixedWidth(450)
         self._issuer_dropdown.currentIndexChanged.connect(self._on_issuer_changed)
         layout.addWidget(self._issuer_dropdown)
         layout.addSpacing(10)
@@ -388,74 +388,11 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         cdb.castellan_settings.pin(keys=("settings",), val=self.settings)
         self.app.vault.plugin_state["castellan"]["settings"] = self.settings
 
-        self._create_registry(hab, rgy)
-
-    def _create_registry(self, hab, rgy):
-        issuer_aid = hab.pre
-        logger.info(f"Issuer {issuer_aid} has {len(hab.kever.wits)} witnesses, launching auth dialog")
-
-        # Launch witness authentication dialog
-        auth_dialog = WitnessAuthenticationDialog(
-            app=self.app,
-            hab=hab,
-            witness_ids=hab.kever.wits,
-            auth_only=True,
-            signals=self.signals,
-            parent=self
-        )
-        auth_dialog.open()
-        return
-
-    @qasync.asyncSlot(dict)
-    async def _on_auth_codes_entered(self, data: dict):
-        """
-        Handle auth codes entered from WitnessAuthenticationDialog.
-
-        Args:
-            data: Dictionary containing 'codes' key with list of "witness_id:passcode" strings
-        """
-        self.signals.auth_codes_entered.disconnect(self._on_auth_codes_entered)
-        codes = data.get('codes', [])
-        logger.info(f"Setup received {len(codes)} auth codes from WitnessAuthenticationDialog")
-
-        hby = self.app.vault.hby
-        rgy = self.app.vault.rgy
-
-        hab = hby.habs[self.settings.issuer_aid]
-
-        auths = {}
-        if codes:
-            code_time = helping.nowIso8601()
-            for arg in codes:
-                wit, code = arg.split(":")
-                auths[wit] = f"{code}#{code_time}"
-
-        kwa = dict(nonce=randomNonce())
-        registry = rgy.makeRegistry(name=hab.name, prefix=hab.pre, **kwa)
-
-        rseal = SealEvent(registry.regk, "0", registry.regd)
-        rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
-
-        anc = hab.interact(data=[rseal])
-        aserder = SerderKERI(raw=bytes(anc))
-
-        seqner = Seqner(sn=hab.kever.sner.num)
-        saider = Saider(qb64=hab.kever.serder.said)
-        registry.anchorMsg(pre=registry.vcp.pre,
-                           regd=registry.vcp.said,
-                           seqner=seqner,
-                           saider=saider)
-
-        receiptor = Receiptor(hby=hby)
-        await receiptor.receipt(aserder.pre, aserder.sn, auths=auths)
-
         logger.info(f"Castellan admin setup complete")
         self.setup_complete_clicked.emit()
 
-
     def on_show(self) -> None:
         logger.info("Castellan setup shown")
-        self.signals.auth_codes_entered.connect(self._on_auth_codes_entered)
         self._load_dropdowns()
 
     def _on_toggle_changed(self, value: str):

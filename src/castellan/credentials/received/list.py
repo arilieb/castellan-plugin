@@ -18,6 +18,8 @@ from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithButton, Locks
 from ...core import remoting
 from .upload import UploadReceivedCredentialsDialog
 from .view import ViewReceivedCredentialDialog
+from .edit import EditReceivedCredentialDialog
+from .delete import DeleteReceivedCredentialDialog
 
 if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
@@ -53,9 +55,10 @@ class ReceivedCredentialsListPage(QWidget):
             icon_path=":/assets/material-icons/in-badge.svg",
             show_add_button=True,
             add_button_text="Upload Credential(s)",
-            row_actions=["View", "Delete"],
+            row_actions=["View", "Edit", "Delete"],
             row_action_icons={
                 "View": ":/assets/material-icons/view.svg",
+                "Edit": ":/assets/material-icons/edit.svg",
                 "Delete": ":/assets/material-icons/delete.svg",
             },
             items_per_page=10,
@@ -144,6 +147,8 @@ class ReceivedCredentialsListPage(QWidget):
         said = row_data.get('_said', '')
         if action == "View":
             self._view_credential(said)
+        elif action == "Edit":
+            self._edit_credential(said)
         elif action == "Delete":
             self._confirm_delete_credential(said)
 
@@ -152,50 +157,47 @@ class ReceivedCredentialsListPage(QWidget):
         if not credential:
             logger.error(f"Credential {said} not in cache")
             return
-        dialog = ViewReceivedCredentialDialog(credential=credential, parent=self)
+        dialog = ViewReceivedCredentialDialog(app=self.app, credential=credential, parent=self)
+        dialog.show()
+
+    def _edit_credential(self, said: str):
+        """Handle Edit credential action."""
+        credential = self._credentials_cache.get(said)
+        if not credential:
+            logger.error(f"Credential {said} not in cache")
+            return
+        dialog = EditReceivedCredentialDialog(
+            app=self.app,
+            credential=credential,
+            on_success=self._refresh_table,
+            parent=self
+        )
         dialog.show()
 
     def _confirm_delete_credential(self, said: str):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 10, 0, 0)
-        label = QLabel("Remove this credential from the Castellan server?")
-        label.setStyleSheet("font-size: 13px;")
-        label.setWordWrap(True)
-        layout.addWidget(label)
+        """Handle Delete credential action."""
+        credential = self._credentials_cache.get(said)
+        if not credential:
+            logger.error(f"Credential {said} not in cache")
+            return
 
-        button_row = QHBoxLayout()
-        button_row.addStretch()
-        no_btn = LocksmithInvertedButton("No")
-        yes_btn = LocksmithButton("Yes")
-        button_row.addWidget(no_btn)
-        button_row.addWidget(yes_btn)
+        schema = credential.get('schema', {})
+        schema_title = schema.get('title', '')
+        credential_name = schema_title if schema_title else said[:12]
 
-        dialog = LocksmithDialog(
-            parent=self,
-            title="Remove Credential",
-            title_icon=":/assets/material-icons/delete.svg",
-            content=content,
-            buttons=button_row,
+        dialog = DeleteReceivedCredentialDialog(
+            app=self.app,
+            credential_name=credential_name,
+            credential_said=said,
+            on_success=self._on_credential_deleted,
+            parent=self
         )
-        no_btn.clicked.connect(dialog.close)
-        yes_btn.clicked.connect(lambda: self._delete_credential(said, dialog))
-        dialog.show()
+        dialog.open()
 
-    def _delete_credential(self, said: str, dialog: LocksmithDialog):
-        dialog.close()
-        self._do_delete_credential(said)
-
-    @qasync.asyncSlot()
-    async def _do_delete_credential(self, said: str):
-        try:
-            result = await remoting.delete_received_credential(self.app, said)
-            if result.get('success'):
-                self._refresh_table()
-            else:
-                logger.error(f"Delete failed: {result.get('error')}")
-        except Exception as e:
-            logger.exception(f"Error deleting credential: {e}")
+    def _on_credential_deleted(self, credential_said: str):
+        """Handle successful credential deletion."""
+        logger.info(f"Credential {credential_said} deleted, reloading list")
+        self._refresh_table()
 
     def set_vault_name(self, vault_name: str):
         self.vault_name = vault_name

@@ -7,18 +7,18 @@ Issued credentials list page — shows issued credentials stored on the Castella
 from typing import Any, TYPE_CHECKING
 
 import qasync
-from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtGui import QPalette, QColor
+from PySide6.QtWidgets import QWidget, QVBoxLayout
 from keri import help
 from keri.app import connecting
+from keri.core import coring
 from keri.help import helping
-
 from locksmith.ui import colors
 from locksmith.ui.toolkit.tables import PaginatedTableWidget
 
-from ...core import remoting
 from .upload import UploadIssuedCredentialsDialog
 from .view import ViewIssuedCredentialDialog
+from ...core import remoting
 
 if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
@@ -48,8 +48,8 @@ class IssuedCredentialsListPage(QWidget):
         self.setAutoFillBackground(True)
 
         self.table = PaginatedTableWidget(
-            columns=["Schema", "Recipient", "Status", "Issued Date"],
-            column_widths={"Schema": 220, "Status": 110, "Issued Date": 165, "Actions": 50},
+            columns=["Schema", "Recipient", "Status (Local)", "Issued Date"],
+            column_widths={"Schema": 220, "Status (Local)": 125, "Issued Date": 165, "Actions": 50},
             title="Issued Credentials",
             icon_path=":/assets/material-icons/out-badge.svg",
             show_add_button=True,
@@ -65,7 +65,7 @@ class IssuedCredentialsListPage(QWidget):
             column_sort_mapping={
                 "Schema": "schema",
                 "Recipient": "recipient",
-                "Status": "status",
+                "Status (Local)": "status",
                 "Issued Date": "created_at",
             },
             transform_func=self._transform_credential_to_row,
@@ -84,6 +84,7 @@ class IssuedCredentialsListPage(QWidget):
         org = connecting.Organizer(hby=self.app.vault.hby)
 
         said = credential.get('said', '')
+        sad = credential.get('sad', '')
         schema = credential.get('schema', {})
         created_at = helping.fromIso8601(credential.get('created_at', '')).strftime("%b %d, %Y %I:%M %p")
 
@@ -94,10 +95,35 @@ class IssuedCredentialsListPage(QWidget):
         elif (remote_id := org.get(recp)) is not None:
             recipient_name = f'{remote_id['alias']} ({recp})'
 
+
+
+        remote_status = credential.get('status', '').capitalize()
+
+        regk = sad.get('ri')
+        status = self.app.rgy.tevers[regk].vcState(said)
+
+        status_text = ""
+        status_color = colors.TEXT_PRIMARY
+        if status.et in [coring.Ilks.rev, coring.Ilks.brv]:
+            if remote_status == "Issued":
+                status_text = "Issued (Revoked)"
+                status_color = colors.DANGER
+            else:
+                status_text = "Revoked (Revoked)"
+                status_color = colors.TEXT_PRIMARY
+        else:
+            if remote_status == "Issued":
+                status_text = "Issued (Issued)"
+                status_color = colors.TEXT_PRIMARY
+            else:
+                status_text = "Revoked (Issued)"
+                status_color = colors.DANGER
+
         row_data = {
             'Schema': schema.get('title', ''),
             'Recipient': recipient_name,
-            'Status': credential.get('status', '').capitalize(),
+            'Status (Local)': status_text,
+            'Status (Local)_color': status_color,
             'Issued Date': created_at,
             '_said': said,
         }
@@ -225,3 +251,73 @@ class IssuedCredentialsListPage(QWidget):
     def on_show(self):
         self._credentials_cache.clear()
         self.table.request_load()
+        self._check_issuer_keystate()
+
+    @qasync.asyncSlot()
+    async def _check_issuer_keystate(self):
+        """Check if any issuer identifiers have outdated key state on the Castellan server."""
+        if not self.app or not self.app.vault or not self.app.vault.hby:
+            return
+
+        try:
+            issuers = []
+
+            for (said,), schemer in self.app.vault.hby.db.schema.getItemIter():
+                # Determine issuer name
+                registry = self.app.vault.rgy.registryByName(said)
+                if registry:
+                    try:
+                        # Get the issuer prefix from the registry
+                        issuer_pre = registry.hab.pre
+                        # Get the hab for this issuer
+                        hab = self.app.vault.hby.habs.get(issuer_pre)
+                        if hab:
+                            issuers.append((hab.pre, hab))
+                    except Exception as e:
+                        logger.warning(f"Error getting issuer for schema {said}: {e}")
+                        continue
+
+            for (hab_pre, hab) in issuers:
+                # Get local key state
+                local_state = hab.kever.state()
+                local_sn = int(local_state.s, 16)  # Sequence number
+
+                # Fetch remote key state from Castellan server
+                result = await remoting.fetch_identifier_keystate(
+                    app=self.app,
+                    identifier_prefix=hab_pre,
+                )
+
+                if not result.get('success'):
+                    # If identifier not found on server, that's okay - skip it
+                    logger.debug(f"Could not fetch key state for {hab.name}: {result.get('error', 'Unknown error')}")
+                    return
+
+                remote_data = result.get('data', {})
+                if remote_data is None:
+                    remote_sn = -1
+                else:
+                    remote_sn = int(remote_data.get('key_state', {}).get('s', 0), 16)
+
+                # Check if remote is behind local
+                if remote_sn < local_sn:
+                    logger.warning(
+                        f"Key state mismatch for '{hab.name}': "
+                        f"local_sn={local_sn}, remote_sn={remote_sn}"
+                    )
+
+                    # Show dialog to prompt user
+                    from .keystate_update import KeyStateUpdateDialog
+
+                    dialog = KeyStateUpdateDialog(
+                        app=self.app,
+                        issuer_name=hab.name,
+                        issuer_aid=hab.pre,
+                        local_sn=local_sn,
+                        remote_sn=remote_sn,
+                        parent=self._parent,
+                    )
+                    dialog.open()
+
+        except Exception as e:
+            logger.exception(f"Error checking issuer key state: {e}")
