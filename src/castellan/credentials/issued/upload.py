@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import qasync
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from keri import help
 
@@ -42,6 +43,7 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
         self._is_uploading = False
         self._dynamic_fields = []  # List to track added dynamic fields
         self._credential_data = {}  # Map index to credential data
+        self._remembered_fields = []  # Store remembered fields for selected schema
 
         content_widget = QWidget()
         self._content_layout = QVBoxLayout(content_widget)
@@ -61,6 +63,24 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
         # Add field type dropdown (initially hidden, shown when credential is selected)
         # Right-aligned, positioned directly below the credential selector
         field_type_container = QHBoxLayout()
+
+        # Add "Add remembered fields?" link (left-aligned, initially hidden)
+        self.remembered_fields_link = QLabel('Add remembered fields?')
+        self.remembered_fields_link.setStyleSheet("""
+            QLabel {
+                color: #0066cc;
+                text-decoration: underline;
+                font-size: 13px;
+            }
+            QLabel:hover {
+                color: #0052a3;
+            }
+        """)
+        self.remembered_fields_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.remembered_fields_link.setVisible(False)  # Hidden initially
+        self.remembered_fields_link.mousePressEvent = lambda event: self._on_add_remembered_fields()
+        field_type_container.addWidget(self.remembered_fields_link)
+
         field_type_container.addStretch()  # Push dropdown to the right
 
         self.add_field_dropdown = FloatingLabelComboBox(label_text="+ add more")
@@ -110,12 +130,15 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
     def _on_credential_selected(self, index: int):
         """Handle credential selection from the dropdown."""
         if index <= 0:  # Skip placeholder "Select Credential" option
-            # No credential selected - hide add field dropdown
+            # No credential selected - hide add field dropdown and remembered fields link
             self.add_field_dropdown.setVisible(False)
+            self.remembered_fields_link.setVisible(False)
             # Reset add field dropdown to default state
             self.add_field_dropdown.setCurrentIndex(0)
             # Clear dynamic fields
             self._clear_dynamic_fields()
+            # Clear remembered fields cache
+            self._remembered_fields = []
             # Restore original dialog height
             self.setFixedHeight(self._initial_height)
             self.center_on_parent()
@@ -126,12 +149,53 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
             self.setFixedHeight(self._expanded_height)
             self.center_on_parent()
 
+            # Query backend for remembered fields
+            self._fetch_remembered_fields(index)
+
     def _clear_dynamic_fields(self):
         """Remove all dynamic field widgets from the layout."""
         for field in self._dynamic_fields:
             self._content_layout.removeWidget(field)
             field.deleteLater()
         self._dynamic_fields.clear()
+
+    @qasync.asyncSlot()
+    async def _fetch_remembered_fields(self, credential_index: int):
+        """Fetch remembered fields for the selected credential's schema."""
+        credential_data = self._credential_data.get(credential_index)
+        if not credential_data:
+            return
+
+        schema = credential_data.get('schema', {})
+        schema_said = schema.get('$id', '')
+
+        if not schema_said:
+            logger.warning("Selected credential has no schema SAID")
+            self._remembered_fields = []
+            self.remembered_fields_link.setVisible(False)
+            return
+
+        try:
+            result = await remoting.fetch_schema_fields(self.app, schema_said)
+
+            if result.get('success'):
+                fields = result.get('fields', [])
+                self._remembered_fields = fields
+
+                # Show link only if there are remembered fields
+                if fields:
+                    self.remembered_fields_link.setVisible(True)
+                else:
+                    self.remembered_fields_link.setVisible(False)
+            else:
+                logger.error(f"Failed to fetch schema fields: {result.get('error')}")
+                self._remembered_fields = []
+                self.remembered_fields_link.setVisible(False)
+
+        except Exception as e:
+            logger.exception(f"Error fetching remembered fields: {e}")
+            self._remembered_fields = []
+            self.remembered_fields_link.setVisible(False)
 
     def _adjust_dialog_height(self):
         """Adjust dialog height based on number of dynamic fields."""
@@ -188,6 +252,44 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
 
         # Reset dropdown to placeholder after selection
         self.add_field_dropdown.setCurrentIndex(0)
+
+    def _on_add_remembered_fields(self):
+        """Add all remembered fields to the dialog when link is clicked."""
+        if not self._remembered_fields:
+            return
+
+        # Map type strings to widget classes
+        type_map = {
+            'text': EditableTextLabelValue,
+            'url': EditableURLLabelValue,
+            'email': EditableEmailLabelValue,
+            'address': EditableAddressLabelValue,
+            'date': EditableDateLabelValue,
+            'phone': EditablePhoneLabelValue,
+        }
+
+        for field_data in self._remembered_fields:
+            label = field_data.get('label', 'Field')
+            field_type = field_data.get('type', 'text').lower()
+
+            # Get appropriate widget class
+            WidgetClass = type_map.get(field_type, EditableTextLabelValue)
+
+            # Create field widget with label and empty value
+            field_widget = WidgetClass(label=label, value="")
+
+            # Add to dynamic fields list
+            self._dynamic_fields.append(field_widget)
+
+            # Insert before the stretch and button row
+            insert_index = self._content_layout.count() - 1  # Before stretch
+            self._content_layout.insertWidget(insert_index, field_widget)
+
+        # Adjust dialog height to accommodate new fields
+        self._adjust_dialog_height()
+
+        # Hide the link after adding fields (prevent duplicate adds)
+        self.remembered_fields_link.setVisible(False)
 
     @qasync.asyncSlot()
     async def _populate_dropdown(self):

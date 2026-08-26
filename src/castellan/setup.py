@@ -8,7 +8,6 @@ from typing import Optional
 from urllib import parse
 from urllib.parse import urlparse
 
-import qasync
 import requests
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, Signal, QSize
 from PySide6.QtGui import QIcon
@@ -17,25 +16,18 @@ from PySide6.QtWidgets import (
 from keri import help
 from keri.app import connecting
 from keri.app.habbing import GroupHab
-from keri.core.coring import randomNonce, Seqner, Saider
-from keri.core.eventing import SealEvent
-from keri.core.serdering import SerderKERI
-from keri.help import helping
 from keri.kering import Schemes
 from locksmith.core import habbing
 from locksmith.core.apping import LocksmithApplication
 from locksmith.core.signals import DoerSignalBridge
-from locksmith.core.remoting import resolve_oobi_sync
 from locksmith.ui import colors
 from locksmith.ui.navigation import Pages
 from locksmith.ui.toolkit.widgets import CollapsibleSection
 from locksmith.ui.toolkit.widgets.buttons import LocksmithButton, LocksmithInvertedButton, LocksmithCopyButton
 from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox, FloatingLabelLineEdit
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage
-from locksmith.ui.vault.identifiers.authenticate import WitnessAuthenticationDialog
 from locksmith.ui.vault.page import VaultPage
 
-from castellan.core.querying import Receiptor
 from castellan.db.basing import CastellanSettings
 
 BORDER = "#d7d9dc"
@@ -166,7 +158,7 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         layout.addSpacing(10)
 
         self._castellan_oobi_field = FloatingLabelLineEdit("Castellan Server OOBI")
-        self._castellan_oobi_field.setText("http://saas-platform:5927/oobi/ENthQEOcwbhBa46Z9Za5fy58RS4VzQxi3FVgC98PLzth")
+        self._castellan_oobi_field.setText("")
         self._castellan_oobi_field.setFixedWidth(420)
         layout.addWidget(self._castellan_oobi_field)
 

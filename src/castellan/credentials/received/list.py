@@ -83,11 +83,11 @@ class ReceivedCredentialsListPage(QWidget):
 
     def _transform_credential_to_row(self, credential: dict[str, Any]) -> dict[str, Any]:
         said = credential.get('said', '')
-        schema = credential.get('schema', {})
+        schema_title = credential.get('schema_title')
         created_at = credential.get('created_at', '')
 
         row_data = {
-            'Schema': schema.get('title', ''),
+            'Schema': schema_title,
             'Issuer': credential.get('issuer', ''),
             'Status': credential.get('status', '').capitalize(),
             'Received Date': created_at,

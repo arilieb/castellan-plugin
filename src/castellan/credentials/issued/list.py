@@ -85,7 +85,8 @@ class IssuedCredentialsListPage(QWidget):
 
         said = credential.get('said', '')
         sad = credential.get('sad', '')
-        schema = credential.get('schema', {})
+        schema_title = credential.get('schema_title')
+
         created_at = helping.fromIso8601(credential.get('created_at', '')).strftime("%b %d, %Y %I:%M %p")
 
         recp = credential.get('recipient', '')
@@ -95,15 +96,11 @@ class IssuedCredentialsListPage(QWidget):
         elif (remote_id := org.get(recp)) is not None:
             recipient_name = f'{remote_id['alias']} ({recp})'
 
-
-
         remote_status = credential.get('status', '').capitalize()
 
         regk = sad.get('ri')
         status = self.app.rgy.tevers[regk].vcState(said)
 
-        status_text = ""
-        status_color = colors.TEXT_PRIMARY
         if status.et in [coring.Ilks.rev, coring.Ilks.brv]:
             if remote_status == "Issued":
                 status_text = "Issued (Revoked)"
@@ -120,7 +117,7 @@ class IssuedCredentialsListPage(QWidget):
                 status_color = colors.DANGER
 
         row_data = {
-            'Schema': schema.get('title', ''),
+            'Schema': schema_title,
             'Recipient': recipient_name,
             'Status (Local)': status_text,
             'Status (Local)_color': status_color,

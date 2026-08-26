@@ -9,7 +9,7 @@ import urllib.parse
 from typing import TYPE_CHECKING, Dict, Any, Optional
 
 from keri.core.scheming import Schemer
-from locksmith.core.credentialing import outputCred, escape_keys
+from locksmith.core.credentialing import outputCred
 
 if TYPE_CHECKING:
     from locksmith.core.apping import LocksmithApplication
@@ -121,7 +121,8 @@ async def upload_issued_credential(
             'said': credential_said,
             'issuer': issuer,
             'recipient': recipient,
-            'schema': escape_keys(schema),
+            'schema_said': schema.get("$id"),
+            'schema_title': schema.get("title"),
         }
 
         # Add metadata if provided
@@ -297,6 +298,54 @@ async def fetch_all_castellan_schema_saids(app: "LocksmithApplication") -> set:
         return set()
 
 
+async def fetch_schema_fields(
+    app: "LocksmithApplication",
+    schema_said: str,
+) -> Dict[str, Any]:
+    """
+    Fetch remembered fields for a schema from the Castellan server.
+
+    Args:
+        app: The Locksmith application instance
+        schema_said: The SAID of the schema
+
+    Returns:
+        Dict with 'success' boolean and optional 'error' or 'fields' keys
+        Example success response: {'success': True, 'fields': [{'label': 'Email', 'type': 'email'}, ...]}
+        Example empty response: {'success': True, 'fields': []}
+        Example error response: {'success': False, 'error': 'API error: 404'}
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        response = await essr.request(
+            path=f"/schemas/{urllib.parse.quote(schema_said, safe='')}/fields",
+            method="GET",
+            timeout=30,
+        )
+
+        if response is not None and response.status_code == 200:
+            data = response.json()
+            # Backend should return: {'fields': [{'label': 'Email', 'type': 'email'}, ...]}
+            return {
+                'success': True,
+                'fields': data.get('fields', [])
+            }
+        elif response is not None and response.status_code == 404:
+            # No remembered fields for this schema - treat as success with empty list
+            return {'success': True, 'fields': []}
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}"
+            }
+    except Exception as e:
+        logger.error(f"Error fetching schema fields: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 async def upload_schema(
     app: "LocksmithApplication",
     schema_said: str,
@@ -455,7 +504,8 @@ async def upload_received_credential(
             'said': credential_said,
             'issuer': issuer,
             'holder': holder,
-            'schema': escape_keys(schema),
+            'schema_said': schema.get("$id"),
+            'schema_title': schema.get("title"),
         }
 
         if dynamic_field_data:
