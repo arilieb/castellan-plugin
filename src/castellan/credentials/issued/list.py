@@ -8,7 +8,7 @@ from typing import Any, TYPE_CHECKING
 
 import qasync
 from PySide6.QtGui import QPalette, QColor
-from PySide6.QtWidgets import QWidget, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
 from keri import help
 from keri.app import connecting
 from keri.core import coring
@@ -54,12 +54,14 @@ class IssuedCredentialsListPage(QWidget):
             icon_path=":/assets/material-icons/out-badge.svg",
             show_add_button=True,
             add_button_text="Upload Credential",
-            row_actions=["View", "Edit", "Delete"],
+            row_actions=["View", "Edit", "Update", "Delete"],
             row_action_icons={
                 "View": ":/assets/material-icons/view.svg",
                 "Edit": ":/assets/material-icons/edit.svg",
+                "Update": ":/assets/material-icons/cloud_sync.svg",
                 "Delete": ":/assets/material-icons/delete.svg",
             },
+            row_actions_callback=self._get_row_actions,
             items_per_page=10,
             show_search=True,
             column_sort_mapping={
@@ -97,36 +99,56 @@ class IssuedCredentialsListPage(QWidget):
             recipient_name = f'{remote_id['alias']} ({recp})'
 
         remote_status = credential.get('status', '').capitalize()
+        local_status = self._local_credential_status(self.app, said, sad)
 
-        regk = sad.get('ri')
-        status = self.app.rgy.tevers[regk].vcState(said)
-
-        if status.et in [coring.Ilks.rev, coring.Ilks.brv]:
-            if remote_status == "Issued":
-                status_text = "Issued (Revoked)"
-                status_color = colors.DANGER
-            else:
-                status_text = "Revoked (Revoked)"
-                status_color = colors.TEXT_PRIMARY
-        else:
-            if remote_status == "Issued":
-                status_text = "Issued (Issued)"
-                status_color = colors.TEXT_PRIMARY
-            else:
-                status_text = "Revoked (Issued)"
-                status_color = colors.DANGER
+        is_out_of_sync = local_status is not None and local_status != remote_status
+        status_text = f"{remote_status} ({local_status})" if local_status is not None else remote_status
 
         row_data = {
             'Schema': schema_title,
             'Recipient': recipient_name,
             'Status (Local)': status_text,
-            'Status (Local)_color': status_color,
             'Issued Date': created_at,
             '_said': said,
+            '_out_of_sync': is_out_of_sync,
+            '_local_status': local_status.lower() if local_status is not None else None,
         }
+
+        if is_out_of_sync:
+            tooltip = (
+                f"Castellan server reports this credential as '{remote_status}', "
+                f"but it is '{local_status}' locally. Use 'Update' to sync the server."
+            )
+            for col in ("Schema", "Recipient", "Status (Local)", "Issued Date"):
+                row_data[f"{col}_color"] = colors.DANGER
+                row_data[f"{col}_tooltip"] = tooltip
 
         self._credentials_cache[said] = credential
         return row_data
+
+    @staticmethod
+    def _local_credential_status(app, said: str, sad) -> str | None:
+        """Determine local TEL status ('Issued'/'Revoked') for a credential, or None if unknown locally."""
+        try:
+            regk = sad.get('ri')
+            vc_state = app.rgy.tevers[regk].vcState(said)
+            return "Revoked" if vc_state.et in [coring.Ilks.rev, coring.Ilks.brv] else "Issued"
+        except Exception as e:
+            logger.debug(f"Could not determine local TEL state for {said}: {e}")
+            return None
+
+    def _get_row_actions(self, row_data: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+        all_icons = {
+            "View": ":/assets/material-icons/view.svg",
+            "Edit": ":/assets/material-icons/edit.svg",
+            "Update": ":/assets/material-icons/cloud_sync.svg",
+            "Delete": ":/assets/material-icons/delete.svg",
+        }
+        actions = ["View", "Edit"]
+        if row_data.get('_out_of_sync'):
+            actions.append("Update")
+        actions.append("Delete")
+        return actions, {a: all_icons[a] for a in actions}
 
     @qasync.asyncSlot(dict)
     async def _on_load_requested(self, params: dict):
@@ -180,6 +202,8 @@ class IssuedCredentialsListPage(QWidget):
             self._view_credential(said)
         elif action == "Edit":
             self._edit_credential(said)
+        elif action == "Update":
+            self._push_status_update(row_data)
         elif action == "Delete":
             self._on_delete_credential(row_data)
 
@@ -210,6 +234,21 @@ class IssuedCredentialsListPage(QWidget):
 
     def _on_credential_edited(self):
         """Callback after successful credential edit."""
+        self._refresh_table()
+
+    @qasync.asyncSlot(dict)
+    async def _push_status_update(self, row_data: dict[str, Any]):
+        """Push the locally-known status to the Castellan server."""
+        said = row_data.get('_said', '')
+        local_status = row_data.get('_local_status')
+        if not said or not local_status:
+            return
+
+        result = await remoting.update_issued_credential_status(self.app, said, local_status)
+        if not result.get('success'):
+            QMessageBox.critical(self, "Update Failed", result.get('error', 'Unknown error'))
+            return
+
         self._refresh_table()
 
     def _on_delete_credential(self, row_data: dict[str, Any]):
@@ -248,9 +287,81 @@ class IssuedCredentialsListPage(QWidget):
     def on_show(self):
         self._credentials_cache.clear()
         self.table.request_load()
-        self._check_issuer_keystate()
+        self._check_server_sync()
 
     @qasync.asyncSlot()
+    async def _check_server_sync(self):
+        """
+        Check for local state the Castellan server doesn't know about yet.
+
+        Revoked-credential mismatches are checked first, since revoking a
+        credential locally anchors a new event into the issuer's KEL - meaning
+        the accompanying key state check is already handled by the same dialog.
+        The separate pure-keystate check only runs if no revocations were found.
+        """
+        try:
+            found_revocations = await self._check_revoked_credentials()
+            if found_revocations:
+                return
+            await self._check_issuer_keystate()
+        except Exception as e:
+            logger.exception(f"Error checking server sync state: {e}")
+
+    async def _check_revoked_credentials(self) -> bool:
+        """
+        Scan all issued credentials for local revocations not yet reflected on
+        the Castellan server, opening one ServerUpdateDialog per mismatch found.
+
+        Returns:
+            True if at least one mismatch was found (and a dialog opened).
+        """
+        if not self.app or not self.app.vault or not self.app.vault.hby:
+            return False
+
+        response = await remoting.fetch_issued_credentials(app=self.app, page=0, page_size=10000)
+        if not response.get('success'):
+            logger.debug(f"Could not fetch issued credentials for revocation check: {response.get('error')}")
+            return False
+
+        from .server_update import ServerUpdateDialog
+
+        found = False
+        for credential in response.get('credentials', []):
+            said = credential.get('said', '')
+            sad = credential.get('sad', '')
+            remote_status = credential.get('status', '').capitalize()
+            local_status = self._local_credential_status(self.app, said, sad)
+
+            if local_status != "Revoked" or remote_status == "Revoked":
+                continue
+
+            issuer_pre = credential.get('issuer', '')
+            hab = self.app.vault.hby.habs.get(issuer_pre)
+            if not hab:
+                logger.warning(f"Could not find local hab for issuer {issuer_pre}; skipping revocation sync for {said}")
+                continue
+
+            local_state = hab.kever.state()
+            local_sn = int(local_state.s, 16)
+
+            keystate_result = await remoting.fetch_identifier_keystate(app=self.app, identifier_prefix=issuer_pre)
+            remote_data = keystate_result.get('data') if keystate_result.get('success') else None
+            remote_sn = int(remote_data.get('key_state', {}).get('s', 0), 16) if remote_data else -1
+
+            dialog = ServerUpdateDialog(
+                app=self.app,
+                issuer_name=hab.name,
+                issuer_aid=hab.pre,
+                local_sn=local_sn,
+                remote_sn=remote_sn,
+                revoked_credential={'said': said, 'schema_title': credential.get('schema_title')},
+                parent=self,
+            )
+            dialog.exec()
+            found = True
+
+        return found
+
     async def _check_issuer_keystate(self):
         """Check if any issuer identifiers have outdated key state on the Castellan server."""
         if not self.app or not self.app.vault or not self.app.vault.hby:
@@ -288,7 +399,7 @@ class IssuedCredentialsListPage(QWidget):
                 if not result.get('success'):
                     # If identifier not found on server, that's okay - skip it
                     logger.debug(f"Could not fetch key state for {hab.name}: {result.get('error', 'Unknown error')}")
-                    return
+                    continue
 
                 remote_data = result.get('data', {})
                 if remote_data is None:
@@ -304,9 +415,9 @@ class IssuedCredentialsListPage(QWidget):
                     )
 
                     # Show dialog to prompt user
-                    from .keystate_update import KeyStateUpdateDialog
+                    from .server_update import ServerUpdateDialog
 
-                    dialog = KeyStateUpdateDialog(
+                    dialog = ServerUpdateDialog(
                         app=self.app,
                         issuer_name=hab.name,
                         issuer_aid=hab.pre,
@@ -314,7 +425,7 @@ class IssuedCredentialsListPage(QWidget):
                         remote_sn=remote_sn,
                         parent=self._parent,
                     )
-                    dialog.open()
+                    dialog.exec()
 
         except Exception as e:
             logger.exception(f"Error checking issuer key state: {e}")

@@ -213,6 +213,55 @@ async def update_issued_credential_metadata(
         return {'success': False, 'error': str(e)}
 
 
+async def update_issued_credential_status(
+    app: "LocksmithApplication",
+    credential_said: str,
+    status: str,
+) -> Dict[str, Any]:
+    """
+    Push a local status change (e.g. a TEL revocation) to the Castellan server
+    so its stored record matches local truth.
+
+    Args:
+        app: The Locksmith application instance
+        credential_said: The SAID of the credential to update
+        status: The new status value ("issued" or "revoked")
+
+    Returns:
+        Dict with 'success' boolean and optional 'error' or 'data' keys
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        body = {'status': status}
+
+        response = await essr.request(
+            path=f"/issued-credentials/{urllib.parse.quote(credential_said, safe='')}",
+            method="PATCH",
+            json=body,
+            timeout=30,
+        )
+
+        if response and response.status_code in (200, 204):
+            return {'success': True, 'data': response.json() if response.content else {}}
+        else:
+            if response is not None:
+                logger.error(f"Status update failed with status {response.status_code}: {response.text}")
+                try:
+                    error_msg = response.json().get('description', f"Status {response.status_code}")
+                except Exception:
+                    error_msg = f"Status {response.status_code}"
+            else:
+                error_msg = "No response"
+            return {'success': False, 'error': error_msg}
+
+    except Exception as e:
+        logger.error(f"Error updating issued credential status: {e}")
+        return {'success': False, 'error': str(e)}
+
+
 async def delete_issued_credential(
     app: "LocksmithApplication",
     said: str,
