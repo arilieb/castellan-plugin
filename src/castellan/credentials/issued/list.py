@@ -4,11 +4,12 @@ castellan.credentials.issued.list module
 
 Issued credentials list page — shows issued credentials stored on the Castellan server.
 """
+import asyncio
 from typing import Any, TYPE_CHECKING
 
 import qasync
 from PySide6.QtGui import QPalette, QColor
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox, QDialog
 from keri import help
 from keri.app import connecting
 from keri.core import coring
@@ -24,6 +25,21 @@ if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
 
 logger = help.ogler.getLogger(__name__)
+
+
+async def _exec_dialog_async(dialog: QDialog) -> int:
+    """
+    Await a dialog's completion without blocking the event loop.
+
+    Unlike QDialog.exec(), which blocks via a nested native event loop and
+    conflicts with asyncio's task re-entrancy guard when the dialog's own
+    slots are qasync coroutines, this suspends via a real `await` so the
+    calling task is fully off the stack while the dialog is open.
+    """
+    future = asyncio.get_event_loop().create_future()
+    dialog.finished.connect(lambda result: not future.done() and future.set_result(result))
+    dialog.open()
+    return await future
 
 
 class IssuedCredentialsListPage(QWidget):
@@ -357,8 +373,10 @@ class IssuedCredentialsListPage(QWidget):
                 revoked_credential={'said': said, 'schema_title': credential.get('schema_title')},
                 parent=self,
             )
-            dialog.exec()
+            result = await _exec_dialog_async(dialog)
             found = True
+            if result == QDialog.DialogCode.Accepted:
+                self._refresh_table()
 
         return found
 
@@ -425,7 +443,9 @@ class IssuedCredentialsListPage(QWidget):
                         remote_sn=remote_sn,
                         parent=self._parent,
                     )
-                    dialog.exec()
+                    result = await _exec_dialog_async(dialog)
+                    if result == QDialog.DialogCode.Accepted:
+                        self._refresh_table()
 
         except Exception as e:
             logger.exception(f"Error checking issuer key state: {e}")
