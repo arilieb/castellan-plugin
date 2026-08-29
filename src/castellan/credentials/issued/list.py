@@ -70,10 +70,11 @@ class IssuedCredentialsListPage(QWidget):
             icon_path=":/assets/material-icons/out-badge.svg",
             show_add_button=True,
             add_button_text="Upload Credential",
-            row_actions=["View", "Edit", "Update", "Delete"],
+            row_actions=["View", "Edit", "Revoke", "Update", "Delete"],
             row_action_icons={
                 "View": ":/assets/material-icons/view.svg",
                 "Edit": ":/assets/material-icons/edit.svg",
+                "Revoke": ":/assets/material-icons/remove_moderator.svg",
                 "Update": ":/assets/material-icons/cloud_sync.svg",
                 "Delete": ":/assets/material-icons/delete.svg",
             },
@@ -157,10 +158,13 @@ class IssuedCredentialsListPage(QWidget):
         all_icons = {
             "View": ":/assets/material-icons/view.svg",
             "Edit": ":/assets/material-icons/edit.svg",
+            "Revoke": ":/assets/material-icons/remove_moderator.svg",
             "Update": ":/assets/material-icons/cloud_sync.svg",
             "Delete": ":/assets/material-icons/delete.svg",
         }
         actions = ["View", "Edit"]
+        if row_data.get('_local_status') == 'issued':
+            actions.append("Revoke")
         if row_data.get('_out_of_sync'):
             actions.append("Update")
         actions.append("Delete")
@@ -218,6 +222,8 @@ class IssuedCredentialsListPage(QWidget):
             self._view_credential(said)
         elif action == "Edit":
             self._edit_credential(said)
+        elif action == "Revoke":
+            self._on_revoke_credential(row_data)
         elif action == "Update":
             self._push_status_update(row_data)
         elif action == "Delete":
@@ -265,6 +271,31 @@ class IssuedCredentialsListPage(QWidget):
             QMessageBox.critical(self, "Update Failed", result.get('error', 'Unknown error'))
             return
 
+        self._refresh_table()
+
+    def _on_revoke_credential(self, row_data: dict[str, Any]):
+        """Handle Revoke credential action."""
+        from .revoke import RevokeIssuedCredentialDialog
+
+        said = row_data.get('_said', '')
+        schema_title = row_data.get('Schema', '')
+
+        if not said:
+            logger.error("Cannot revoke: no credential SAID found")
+            return
+
+        dialog = RevokeIssuedCredentialDialog(
+            app=self.app,
+            schema_name=schema_title,
+            said=said,
+            on_success=self._on_credential_revoked,
+            parent=self.parent(),
+        )
+        dialog.open()
+
+    def _on_credential_revoked(self, credential_said: str):
+        """Handle successful credential revocation."""
+        logger.info(f"Credential {credential_said} revoked, reloading list")
         self._refresh_table()
 
     def _on_delete_credential(self, row_data: dict[str, Any]):
