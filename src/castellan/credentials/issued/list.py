@@ -4,11 +4,12 @@ castellan.credentials.issued.list module
 
 Issued credentials list page — shows issued credentials stored on the Castellan server.
 """
+import asyncio
 from typing import Any, TYPE_CHECKING
 
 import qasync
 from PySide6.QtGui import QPalette, QColor
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QMessageBox, QDialog
 from keri import help
 from keri.app import connecting
 from keri.core import coring
@@ -24,6 +25,21 @@ if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
 
 logger = help.ogler.getLogger(__name__)
+
+
+async def _exec_dialog_async(dialog: QDialog) -> int:
+    """
+    Await a dialog's completion without blocking the event loop.
+
+    Unlike QDialog.exec(), which blocks via a nested native event loop and
+    conflicts with asyncio's task re-entrancy guard when the dialog's own
+    slots are qasync coroutines, this suspends via a real `await` so the
+    calling task is fully off the stack while the dialog is open.
+    """
+    future = asyncio.get_event_loop().create_future()
+    dialog.finished.connect(lambda result: not future.done() and future.set_result(result))
+    dialog.open()
+    return await future
 
 
 class IssuedCredentialsListPage(QWidget):
@@ -54,10 +70,11 @@ class IssuedCredentialsListPage(QWidget):
             icon_path=":/assets/material-icons/out-badge.svg",
             show_add_button=True,
             add_button_text="Upload Credential",
-            row_actions=["View", "Edit", "Update", "Delete"],
+            row_actions=["View", "Edit", "Revoke", "Update", "Delete"],
             row_action_icons={
                 "View": ":/assets/material-icons/view.svg",
                 "Edit": ":/assets/material-icons/edit.svg",
+                "Revoke": ":/assets/material-icons/remove_moderator.svg",
                 "Update": ":/assets/material-icons/cloud_sync.svg",
                 "Delete": ":/assets/material-icons/delete.svg",
             },
@@ -141,10 +158,13 @@ class IssuedCredentialsListPage(QWidget):
         all_icons = {
             "View": ":/assets/material-icons/view.svg",
             "Edit": ":/assets/material-icons/edit.svg",
+            "Revoke": ":/assets/material-icons/remove_moderator.svg",
             "Update": ":/assets/material-icons/cloud_sync.svg",
             "Delete": ":/assets/material-icons/delete.svg",
         }
         actions = ["View", "Edit"]
+        if row_data.get('_local_status') == 'issued':
+            actions.append("Revoke")
         if row_data.get('_out_of_sync'):
             actions.append("Update")
         actions.append("Delete")
@@ -202,6 +222,8 @@ class IssuedCredentialsListPage(QWidget):
             self._view_credential(said)
         elif action == "Edit":
             self._edit_credential(said)
+        elif action == "Revoke":
+            self._on_revoke_credential(row_data)
         elif action == "Update":
             self._push_status_update(row_data)
         elif action == "Delete":
@@ -249,6 +271,31 @@ class IssuedCredentialsListPage(QWidget):
             QMessageBox.critical(self, "Update Failed", result.get('error', 'Unknown error'))
             return
 
+        self._refresh_table()
+
+    def _on_revoke_credential(self, row_data: dict[str, Any]):
+        """Handle Revoke credential action."""
+        from .revoke import RevokeIssuedCredentialDialog
+
+        said = row_data.get('_said', '')
+        schema_title = row_data.get('Schema', '')
+
+        if not said:
+            logger.error("Cannot revoke: no credential SAID found")
+            return
+
+        dialog = RevokeIssuedCredentialDialog(
+            app=self.app,
+            schema_name=schema_title,
+            said=said,
+            on_success=self._on_credential_revoked,
+            parent=self.parent(),
+        )
+        dialog.open()
+
+    def _on_credential_revoked(self, credential_said: str):
+        """Handle successful credential revocation."""
+        logger.info(f"Credential {credential_said} revoked, reloading list")
         self._refresh_table()
 
     def _on_delete_credential(self, row_data: dict[str, Any]):
@@ -357,8 +404,10 @@ class IssuedCredentialsListPage(QWidget):
                 revoked_credential={'said': said, 'schema_title': credential.get('schema_title')},
                 parent=self,
             )
-            dialog.exec()
+            result = await _exec_dialog_async(dialog)
             found = True
+            if result == QDialog.DialogCode.Accepted:
+                self._refresh_table()
 
         return found
 
@@ -425,7 +474,9 @@ class IssuedCredentialsListPage(QWidget):
                         remote_sn=remote_sn,
                         parent=self._parent,
                     )
-                    dialog.exec()
+                    result = await _exec_dialog_async(dialog)
+                    if result == QDialog.DialogCode.Accepted:
+                        self._refresh_table()
 
         except Exception as e:
             logger.exception(f"Error checking issuer key state: {e}")
