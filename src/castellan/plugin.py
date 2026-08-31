@@ -164,6 +164,17 @@ class CastellanPlugin(
             self._db.close()
             self._db = None
 
+    def on_plugin_reset(self, vault: "Vault") -> None:
+        if self._db:
+            self._db.close(clear=True)
+            self._db = None
+        vault.plugin_state.pop("castellan", None)
+        self.on_vault_opened(vault)
+
+    @property
+    def supports_reset(self) -> bool:
+        return True
+
     def _on_setup_complete_event(self) -> None:
         """Handle vault-level doer events relevant to the castellan plugin."""
         self.reset_essr(self._app.vault)
