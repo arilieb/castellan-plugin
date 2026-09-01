@@ -4,6 +4,7 @@ castellan.core.remoting module
 
 Functions for interacting with the Castellan credential management server.
 """
+import asyncio
 import json
 import urllib.parse
 from typing import TYPE_CHECKING, Dict, Any, Optional
@@ -25,6 +26,55 @@ def _get_essr(app: "LocksmithApplication"):
         return None
     return app.vault.plugin_state.get("castellan", {}).get("essr")
 
+# ---------------------------------------------------------------------------
+# ESSR Health
+# ---------------------------------------------------------------------------
+
+async def _essr_health_roundtrip(essr) -> Dict[str, Any]:
+    """Perform a single GET /health roundtrip against the given ESSR client."""
+    try:
+        response = await essr.request(path="/health", method="GET")
+        if response is not None and response.status_code == 200:
+            data = response.json()
+            data['success'] = True
+            return data
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response is not None else 'No response'}"
+            }
+    except Exception as e:
+        return {'success': False, 'error': f'ESSR request failed: {str(e)}'}
+
+
+async def essr_health_check(app: "LocksmithApplication") -> Dict[str, Any]:
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+    return await _essr_health_roundtrip(essr)
+
+
+async def essr_health_guard(essr, max_attempts: int = 5, retry_delay: float = 1.0) -> Dict[str, Any]:
+    """
+    Attempt an ESSR GET /health roundtrip against `essr`, retrying up to
+    `max_attempts` times with `retry_delay` seconds between attempts.
+
+    Returns as soon as a single roundtrip succeeds. If every attempt fails,
+    returns the result of the last attempt (success=False).
+    """
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    result: Dict[str, Any] = {'success': False, 'error': 'No response'}
+    for attempt in range(1, max_attempts + 1):
+        result = await _essr_health_roundtrip(essr)
+        if result.get('success'):
+            return result
+        logger.warning(f"ESSR health check attempt {attempt}/{max_attempts} failed: {result.get('error')}")
+        if attempt < max_attempts:
+            await asyncio.sleep(retry_delay)
+
+    return result
 
 # ---------------------------------------------------------------------------
 # Issued credentials
