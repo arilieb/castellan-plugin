@@ -382,6 +382,12 @@ class CastellanAdminSetupPage(LocksmithFormPage):
 
     def on_show(self) -> None:
         logger.info("Castellan setup shown")
+        # This page is created once and reused for the app's lifetime (see
+        # CastellanPlugin._build_pages), so a stale "Completing Setup..."
+        # disabled state from a prior successful/interrupted attempt can
+        # otherwise persist across a plugin reset that brings the user back
+        # here. Always restore the button to its base state on show.
+        self._reset_complete_button()
         self._load_dropdowns()
 
     def _on_toggle_changed(self, value: str):
