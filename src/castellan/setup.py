@@ -8,6 +8,7 @@ from typing import Optional
 from urllib import parse
 from urllib.parse import urlparse
 
+import qasync
 import requests
 from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect, Signal, QSize
 from PySide6.QtGui import QIcon
@@ -19,6 +20,7 @@ from keri.app.habbing import GroupHab
 from keri.kering import Schemes
 from locksmith.core import habbing
 from locksmith.core.apping import LocksmithApplication
+from locksmith.core.essring import APIClient
 from locksmith.core.signals import DoerSignalBridge
 from locksmith.ui import colors
 from locksmith.ui.navigation import Pages
@@ -28,6 +30,7 @@ from locksmith.ui.toolkit.widgets.fields import FloatingLabelComboBox, FloatingL
 from locksmith.ui.toolkit.widgets.page import LocksmithFormPage
 from locksmith.ui.vault.page import VaultPage
 
+from castellan.core import remoting
 from castellan.db.basing import CastellanSettings
 
 BORDER = "#d7d9dc"
@@ -70,7 +73,6 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         self._build_service_provider_section()
         self._build_issuer_section()
         self.content_layout.addSpacing(40)
-        self._build_error_display()
         self._build_notification()
         self._build_button_row()
         self.content_layout.addStretch()
@@ -211,32 +213,6 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         self.oobi_display_container.setVisible(False)
 
 
-    def _build_error_display(self):
-        """Build the error message display area."""
-        self._error_frame = QFrame()
-        self._error_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: #fee;
-                border: 1px solid #fcc;
-                border-radius: 6px;
-                padding: 12px;
-            }}
-        """)
-        self._error_frame.setVisible(False)
-
-        error_layout = QVBoxLayout()
-        error_layout.setContentsMargins(0, 0, 0, 0)
-        error_layout.setSpacing(4)
-
-        self._error_label = QLabel()
-        self._error_label.setStyleSheet("color: #c00; font-size: 13px; font-weight: 500;")
-        self._error_label.setWordWrap(True)
-        error_layout.addWidget(self._error_label)
-
-        self._error_frame.setLayout(error_layout)
-        self.content_layout.addWidget(self._error_frame)
-        self.content_layout.addSpacing(10)
-
     def _build_notification(self):
         hint = QLabel(
             "Click Complete Setup to save your settings and "
@@ -269,12 +245,6 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         btn_row.addStretch()
 
         self.content_layout.addLayout(btn_row)
-
-    def _get_settings(self) -> Optional[CastellanSettings]:
-        if not self.app or not self.app.vault:
-            return None
-        kg_db = self.app.vault.plugin_state.get("keriguard", {}).get("db")
-        return kg_db.keriguardSettings.get(keys=("settings",)) if kg_db else None
 
     def _cancel(self) -> None:
         self._parent.navigate_to(Pages.VAULT)
@@ -311,25 +281,19 @@ class CastellanAdminSetupPage(LocksmithFormPage):
 
         return len(errors) == 0, errors
 
-    def _display_errors(self, errors: list[str]) -> None:
-        """Display validation errors to the user."""
-        if errors:
-            error_text = "<br>".join([f"• {error}" for error in errors])
-            self._error_label.setText(error_text)
-            self._error_frame.setVisible(True)
-        else:
-            self._error_frame.setVisible(False)
+    def _reset_complete_button(self) -> None:
+        self._complete_btn.setEnabled(True)
+        self._complete_btn.setText("Complete Setup")
 
     def _save_settings(self) -> None:
         # Validate the form first
         is_valid, errors = self._validate_form()
         if not is_valid:
-            self._display_errors(errors)
+            self.show_error("\n".join(errors))
             logger.warning(f"Form validation failed: {errors}")
             return
 
-        # Clear any existing errors
-        self._display_errors([])
+        self.clear_error()
 
         if not self.app or not self.app.vault:
             return
@@ -340,51 +304,90 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         self._complete_btn.setEnabled(False)
         self._complete_btn.setText("Completing Setup...")
 
-        hby = self.app.vault.hby
-        rgy = self.app.vault.rgy
+        self._complete_setup(cdb)
 
-        self.settings = CastellanSettings()
-        issuer_alias = self._issuer_dropdown.currentData()
-        logger.info(f"setting issuer alias as {issuer_alias}")
-        hab = hby.habByName(issuer_alias)
-        self.settings.issuer_aid = hab.pre
+    @qasync.asyncSlot()
+    async def _complete_setup(self, cdb) -> None:
+        """
+        Resolve the registrar OOBI, verify the Castellan server is actually
+        reachable over ESSR, and only then persist settings and proceed.
 
-        registrar_oobi = self._castellan_oobi_field.text().strip()
-        if registrar_oobi is not None:
-            purl = parse.urlparse(registrar_oobi)
+        If the ESSR /health roundtrip cannot succeed even once, the setup is aborted,
+        no settings are persisted, and an error is shown so the user can retry.
+        """
+        try:
+            hby = self.app.vault.hby
 
-            match = OOBI_RE.match(purl.path)
-            if not match:
-                raise ValueError("Invalid OOBI format")
+            settings = CastellanSettings()
+            issuer_alias = self._issuer_dropdown.currentData()
+            logger.info(f"setting issuer alias as {issuer_alias}")
+            hab = hby.habByName(issuer_alias)
+            settings.issuer_aid = hab.pre
 
-            self.settings.registrar_aid = match.group("cid")
+            registrar_oobi = self._castellan_oobi_field.text().strip()
+            if registrar_oobi:
+                purl = parse.urlparse(registrar_oobi)
 
-            response = requests.get(registrar_oobi)
-            hab.psr.parse(ims=response.content)
+                match = OOBI_RE.match(purl.path)
+                if not match:
+                    raise ValueError("Invalid OOBI format")
 
-            hab.kvy.processEscrows()
+                settings.registrar_aid = match.group("cid")
 
-            org = connecting.Organizer(hby=hby)
-            org.update(pre=self.settings.registrar_aid, data=dict(alias="castellan-registrar", oobi=registrar_oobi))
+                response = requests.get(registrar_oobi)
+                hab.psr.parse(ims=response.content)
 
-            urls = hab.fetchUrls(eid=self.settings.registrar_aid, scheme="tcp")
-            self.settings.registrar_url = urls.get(Schemes.tcp, None)
+                hab.kvy.processEscrows()
 
-            if not self.settings.registrar_url:
-                raise ValueError(f"Castellan URL not registered with Castellan AID {self.settings.registrar_aid}).")
+                org = connecting.Organizer(hby=hby)
+                org.update(pre=settings.registrar_aid, data=dict(alias="castellan-registrar", oobi=registrar_oobi))
 
-        publish_mode = self.toggle.value()
-        if publish_mode is not None:
-            self.settings.publish_mode = publish_mode
+                urls = hab.fetchUrls(eid=settings.registrar_aid, scheme="tcp")
+                settings.registrar_url = urls.get(Schemes.tcp, None)
 
-        cdb.castellan_settings.pin(keys=("settings",), val=self.settings)
-        self.app.vault.plugin_state["castellan"]["settings"] = self.settings
+                if not settings.registrar_url:
+                    raise ValueError(f"Castellan URL not registered with Castellan AID {settings.registrar_aid}).")
 
-        logger.info(f"Castellan admin setup complete")
-        self.setup_complete_clicked.emit()
+            publish_mode = self.toggle.value()
+            if publish_mode is not None:
+                settings.publish_mode = publish_mode
+
+            essr = APIClient(
+                url=settings.registrar_url,
+                root=settings.registrar_aid,
+                hby=hby,
+                hab=hab,
+            )
+
+            health_result = await remoting.essr_health_guard(essr, max_attempts=1)
+            if not health_result.get('success'):
+                raise ConnectionError(
+                    "Could not reach the Castellan server via ESSR after 1 attempt(s). "
+                    f"({health_result.get('error', 'Unknown error')}). "
+                    "Please verify that you have created an account on the server for the Castellan account identifier, then try again."
+                )
+
+            cdb.castellan_settings.pin(keys=("settings",), val=settings)
+            self.app.vault.plugin_state["castellan"]["settings"] = settings
+            self.app.vault.plugin_state["castellan"]["essr"] = essr
+            self.settings = settings
+
+            logger.info("Castellan admin setup complete")
+            self.setup_complete_clicked.emit()
+
+        except Exception as e:
+            logger.exception(f"Castellan setup failed: {e}")
+            self._reset_complete_button()
+            self.show_error(str(e))
 
     def on_show(self) -> None:
         logger.info("Castellan setup shown")
+        # This page is created once and reused for the app's lifetime (see
+        # CastellanPlugin._build_pages), so a stale "Completing Setup..."
+        # disabled state from a prior successful/interrupted attempt can
+        # otherwise persist across a plugin reset that brings the user back
+        # here. Always restore the button to its base state on show.
+        self._reset_complete_button()
         self._load_dropdowns()
 
     def _on_toggle_changed(self, value: str):

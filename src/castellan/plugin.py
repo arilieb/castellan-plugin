@@ -40,6 +40,12 @@ class CastellanPlugin(
     def plugin_id(self) -> str:
         return "castellan"
 
+    def get_description(self) -> str:
+        return (
+            "Castellan integration for enterprise credential management. Propogate issued credentials, received "
+            "credentials, and TEL events through a server or service provider."
+        )
+
     def initialize(self, app: "LocksmithApplication", parent) -> None:
         self._app = app
         self.parent = parent
