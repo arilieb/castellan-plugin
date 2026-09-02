@@ -120,11 +120,13 @@ class IssuedCredentialsListPage(QWidget):
 
         is_out_of_sync = local_status is not None and local_status != remote_status
         status_text = f"{remote_status} ({local_status})" if local_status is not None else remote_status
+        status_color = colors.DANGER if is_out_of_sync else colors.SUCCESS_INDICATOR
 
         row_data = {
             'Schema': schema_title,
             'Recipient': recipient_name,
             'Status (Local)': status_text,
+            'Status (Local)_color': status_color,
             'Issued Date': created_at,
             '_said': said,
             '_out_of_sync': is_out_of_sync,
@@ -137,7 +139,6 @@ class IssuedCredentialsListPage(QWidget):
                 f"but it is '{local_status}' locally. Use 'Update' to sync the server."
             )
             for col in ("Schema", "Recipient", "Status (Local)", "Issued Date"):
-                row_data[f"{col}_color"] = colors.DANGER
                 row_data[f"{col}_tooltip"] = tooltip
 
         self._credentials_cache[said] = credential

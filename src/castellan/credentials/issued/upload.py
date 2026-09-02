@@ -302,7 +302,8 @@ class UploadIssuedCredentialsDialog(LocksmithDialog):
 
             reger = self.app.vault.rgy.reger
             hby = self.app.vault.hby
-            saids = [said for (_, said) in reger.issus.getItemIter()]
+            local_aids = list(hby.habs.keys())
+            saids = [said for ((issuer_said,), said) in reger.issus.getItemIter() if issuer_said in local_aids]
             creds = reger.cloneCreds(saids, hby.db)
 
             # Clear existing items

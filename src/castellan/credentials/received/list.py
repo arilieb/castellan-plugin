@@ -7,19 +7,20 @@ Received credentials list page — shows received credentials stored on the Cast
 from typing import Any, TYPE_CHECKING
 
 import qasync
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from PySide6.QtGui import QPalette, QColor
+from PySide6.QtWidgets import QWidget, QVBoxLayout
 from keri import help
-
+from keri.app import connecting
+from keri.core import coring
+from keri.help import helping
 from locksmith.ui import colors
 from locksmith.ui.toolkit.tables import PaginatedTableWidget
-from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithButton, LocksmithInvertedButton
 
-from ...core import remoting
+from .delete import DeleteReceivedCredentialDialog
+from .edit import EditReceivedCredentialDialog
 from .upload import UploadReceivedCredentialsDialog
 from .view import ViewReceivedCredentialDialog
-from .edit import EditReceivedCredentialDialog
-from .delete import DeleteReceivedCredentialDialog
+from ...core import remoting
 
 if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
@@ -49,8 +50,8 @@ class ReceivedCredentialsListPage(QWidget):
         self.setAutoFillBackground(True)
 
         self.table = PaginatedTableWidget(
-            columns=["Schema", "Issuer", "Status", "Received Date"],
-            column_widths={"Schema": 220, "Status": 110, "Received Date": 165, "Actions": 50},
+            columns=["Schema", "Issuer", "Status (Local)", "Received Date"],
+            column_widths={"Schema": 220, "Status (Local)": 125, "Received Date": 165, "Actions": 50},
             title="Received Credentials",
             icon_path=":/assets/material-icons/in-badge.svg",
             show_add_button=True,
@@ -82,20 +83,59 @@ class ReceivedCredentialsListPage(QWidget):
         layout.addWidget(self.table)
 
     def _transform_credential_to_row(self, credential: dict[str, Any]) -> dict[str, Any]:
+        org = connecting.Organizer(hby=self.app.vault.hby)
+
+        sad = credential.get('sad', '')
         said = credential.get('said', '')
         schema_title = credential.get('schema_title')
-        created_at = credential.get('created_at', '')
+        created_at = helping.fromIso8601(credential.get('created_at', '')).strftime("%b %d, %Y %I:%M %p")
+
+        issr = credential.get('issuer', '')
+        issuer_name = f'Unknown ({issr})'
+        if (issuer_hab := self.app.vault.hby.habByPre(issr)) is not None:
+            issuer_name = f'{issuer_hab.name} ({issr})'
+        elif (remote_id := org.get(issr)) is not None:
+            issuer_name = f'{remote_id['alias']} ({issr})'
+
+        remote_status = credential.get('status', '').capitalize()
+        local_status = self._local_credential_status(self.app, said, sad)
+
+        is_out_of_sync = local_status is not None and local_status != remote_status
+        status_text = f"{remote_status} ({local_status})" if local_status is not None else remote_status
+        status_color = colors.DANGER if is_out_of_sync else colors.SUCCESS_INDICATOR
 
         row_data = {
             'Schema': schema_title,
-            'Issuer': credential.get('issuer', ''),
-            'Status': credential.get('status', '').capitalize(),
+            'Issuer': issuer_name,
+            'Status (Local)': status_text,
+            'Status (Local)_color': status_color,
             'Received Date': created_at,
             '_said': said,
+            '_out_of_sync': is_out_of_sync,
+            '_local_status': local_status.lower() if local_status is not None else None,
         }
+
+        if is_out_of_sync:
+            tooltip = (
+                f"Castellan server reports this credential as '{remote_status}', "
+                f"but it is '{local_status}' locally. Use 'Update' to sync the server."
+            )
+            for col in ("Schema", "Recipient", "Status (Local)", "Issued Date"):
+                row_data[f"{col}_tooltip"] = tooltip
 
         self._credentials_cache[said] = credential
         return row_data
+
+    @staticmethod
+    def _local_credential_status(app, said: str, sad) -> str | None:
+        """Determine local TEL status ('Issued'/'Revoked') for a credential, or None if unknown locally."""
+        try:
+            regk = sad.get('ri')
+            vc_state = app.rgy.tevers[regk].vcState(said)
+            return "Revoked" if vc_state.et in [coring.Ilks.rev, coring.Ilks.brv] else "Issued"
+        except Exception as e:
+            logger.debug(f"Could not determine local TEL state for {said}: {e}")
+            return None
 
     @qasync.asyncSlot(dict)
     async def _on_load_requested(self, params: dict):

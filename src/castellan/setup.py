@@ -455,7 +455,7 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         # hby.habs is keyed by AID prefix; hab.name is the human alias
         issuer_count = 0
         for aid, hab in hby.habs.items():
-            if isinstance(hab, GroupHab) or not hab.kever.wits:
+            if isinstance(hab, GroupHab):
                 continue
             display = f"{hab.name} — {aid}"
             # Store hab.name as userData for easy retrieval

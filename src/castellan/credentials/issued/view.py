@@ -96,7 +96,7 @@ class ViewIssuedCredentialDialog(LocksmithDialog):
             "font-size: 12px; "
             "color: #636466;"
         )
-        said_label.setWordWrap(True)
+        said_label.setWordWrap(False)
         said_row.addWidget(said_label)
         copy_btn = LocksmithCopyButton(copy_content=said,  icon_size=24)
         copy_btn.setFixedHeight(22)
