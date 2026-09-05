@@ -66,7 +66,7 @@ class CastellanPlugin(
         from .credentials.issued.list import IssuedCredentialsListPage
         from .credentials.received.list import ReceivedCredentialsListPage
         from .issuers.list import IdentifiersListPage
-        # from .issuers.multisig.initiate import InitiateMultisigPage
+        from .issuers.multisig.initiate import InitiateMultisigPage
         from .setup import CastellanAdminSetupPage
 
         castellan_setup = CastellanAdminSetupPage(app, self.parent)
@@ -78,9 +78,9 @@ class CastellanPlugin(
             "castellan_issuers": IdentifiersListPage(
                 app, on_navigate_to_multisig_init=self._navigate_to_multisig_init, parent=None
             ),
-            # "castellan_multisig_init": InitiateMultisigPage(
-            #     app, on_complete=self._on_multisig_init_complete, parent=None
-            # ),
+            "castellan_multisig_init": InitiateMultisigPage(
+                app, on_complete=self._on_multisig_init_complete, parent=None
+            ),
             "castellan_setup": castellan_setup,
             "castellan_placeholder": CastellanPlaceholderPage("castellan", None),
         }
@@ -91,6 +91,7 @@ class CastellanPlugin(
         """Called when InitiateMultisigPage finishes group+registry setup."""
         logger.info(f"Castellan multisig init complete, registry {regk}")
         self._navigate("castellan_issuers")
+        self._set_active_nav_button("castellan_issuers")
         page = self._pages.get("castellan_issuers")
         if page and hasattr(page, "on_show"):
             page.on_show()
@@ -99,15 +100,26 @@ class CastellanPlugin(
         """
         Callback threaded down: plugin._build_pages -> IdentifiersListPage
         -> UploadIdentifierDialog's "Create a Castellan Multisig" link.
-        Navigates to InitiateMultisigPage without a submenu button (intentionally
-        NOT in nav_buttons_config — reachable only from this link, at this stage
-        of development). "castellan_setup"/"castellan_placeholder" are existing
-        precedent for a registered page with no nav_buttons_config entry.
+        Also reachable via the "Multi-Signature" nav_buttons_config entry.
         """
         self._navigate("castellan_multisig_init")
+        self._set_active_nav_button("castellan_multisig_init")
         page = self._pages.get("castellan_multisig_init")
         if page and hasattr(page, "on_show"):
             page.on_show()
+
+    def _set_active_nav_button(self, page_key: str) -> None:
+        """
+        Sync the submenu's active-button highlight to page_key.
+
+        _make_nav_handler's closure is the only other place that toggles
+        button active state, and it only runs on a direct button click — any
+        navigation triggered programmatically (e.g. a wizard completing and
+        handing off to another page) needs to call this too, or the previous
+        button stays highlighted after the page has moved on.
+        """
+        for key, btn in self._nav_buttons_by_page.items():
+            btn.set_active(key == page_key)
 
     def _show_issued_credentials(self):
         vault_page = self._get_vault_page()
@@ -155,6 +167,7 @@ class CastellanPlugin(
             (":/assets/material-icons/badge_incoming.svg", "Received Credentials", "castellan_received_credentials"),
             (":/assets/material-icons/schema.svg", "Schema", "castellan_schema"),
             (":/assets/material-icons/group.svg", "Issuers", "castellan_issuers"),
+            (":/assets/material-icons/group_add.svg", "Multi-Signature", "castellan_multisig_init"),
         ]
 
         self._nav_buttons_by_page = {}
@@ -200,10 +213,10 @@ class CastellanPlugin(
 
         if settings:
             self.reset_essr(vault)
-            # self._start_multisig_listening(vault)
+            self._start_multisig_listening(vault)
 
     def on_vault_closed(self, vault: "Vault") -> None:
-        # self._stop_multisig_listening(vault)
+        self._stop_multisig_listening(vault)
         vault.plugin_state.pop("castellan", None)
         if self._db:
             self._db.close()
@@ -400,7 +413,7 @@ class CastellanPlugin(
             logger.exception("Error handling new notification in CastellanPlugin")
 
     def on_plugin_reset(self, vault: "Vault") -> None:
-        # self._stop_multisig_listening(vault)
+        self._stop_multisig_listening(vault)
         if self._db:
             self._db.close(clear=True)
             self._db = None
@@ -415,7 +428,7 @@ class CastellanPlugin(
         """Handle vault-level doer events relevant to the castellan plugin."""
         self.reset_essr(self._app.vault)
         if self._identifier_poller is None:
-            # self._start_multisig_listening(self._app.vault)
+            self._start_multisig_listening(self._app.vault)
             pass
         self._show_issued_credentials()
 
