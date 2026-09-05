@@ -5,6 +5,7 @@ castellan.core.remoting module
 Functions for interacting with the Castellan credential management server.
 """
 import asyncio
+import base64
 import json
 import urllib.parse
 from typing import TYPE_CHECKING, Dict, Any, Optional
@@ -768,6 +769,283 @@ async def fetch_identifier_keystate(
 
     except Exception as e:
         logger.error(f"Error fetching identifier key state: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def upload_identifier(
+    app: "LocksmithApplication",
+    aid: str,
+    alias: str,
+    kel_bytes: bytes,
+    oobi: str = "",
+) -> Dict[str, Any]:
+    """
+    Upload a peer-discovery identifier to castellan POST /identifiers.
+
+    Sends a multipart/form-data request with:
+      doc — JSON metadata {aid, alias, oobi}
+      kel — raw CESR-encoded KEL bytes
+
+    Returns dict with 'success' bool and, on success, the stored identifier doc.
+    Returns 'conflict': True when castellan returns 409 (alias already taken).
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        files = {
+            'doc': ('doc.json', json.dumps({"aid": aid, "alias": alias, "oobi": oobi}), 'application/json'),
+            'kel': ('kel.cesr', kel_bytes, 'application/octet-stream'),
+        }
+        response = await essr.request(
+            path="/identifiers",
+            method="POST",
+            files=files,
+            timeout=30,
+        )
+        if response is not None and response.status_code in (200, 201):
+            return {'success': True, 'data': response.json()}
+        elif response is not None and response.status_code == 409:
+            return {'success': False, 'conflict': True, 'error': 'Alias already uploaded to castellan'}
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}",
+            }
+    except Exception as e:
+        logger.error(f"Error uploading identifier: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def fetch_identifier_kel(app: "LocksmithApplication", aid: str) -> Dict[str, Any]:
+    """
+    GET /identifiers/{aid}/kel — fetch the CESR KEL stream for a peer identifier.
+
+    Returns dict with 'success' bool and, on success, 'kel_bytes' (raw bytes).
+    Returns empty kel_bytes if the identifier exists but KEL has not been captured yet.
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        response = await essr.request(
+            path=f"/identifiers/{urllib.parse.quote(aid, safe='')}/kel",
+            method="GET",
+        )
+        if response is not None and response.status_code == 200:
+            data = response.json()
+            kel_b64 = data.get("kel", "")
+            kel_bytes = base64.b64decode(kel_b64) if kel_b64 else b""
+            return {'success': True, 'kel_bytes': kel_bytes}
+        elif response is not None and response.status_code == 404:
+            return {'success': False, 'error': 'Identifier not found on castellan'}
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}",
+            }
+    except Exception as e:
+        logger.error(f"Error fetching KEL for {aid}: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def fetch_identifiers(
+    app: "LocksmithApplication",
+    page: int = 0,
+    page_size: int = 10,
+    filter_term: Optional[str] = None,
+    order: Optional[list] = None,
+    include_key_state: bool = False,
+) -> Dict[str, Any]:
+    """
+    Fetch peer-discovery identifiers from the Castellan server (paginated).
+
+    `include_key_state` asks the server to embed each row's remote key state
+    in the response (so callers rendering a "Seq No" column don't need a
+    separate fetch_identifier_keystate round-trip per row). Leave it False
+    for large/unpaginated fetches (e.g. peer-discovery polling), since the
+    server computes it per identifier and it isn't needed there.
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        params = [f"page={page}", f"page_size={page_size}"]
+        if filter_term:
+            params.append(f"filter={urllib.parse.quote(filter_term)}")
+        if order:
+            for o in order:
+                params.append(f"order={urllib.parse.quote(o)}")
+        if include_key_state:
+            params.append("include_key_state=true")
+
+        path = f"/identifiers?{'&'.join(params)}"
+        response = await essr.request(path=path, method="GET")
+
+        if response is not None and response.status_code == 200:
+            data = response.json()
+            data['success'] = True
+            return data
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}",
+            }
+    except Exception as e:
+        logger.error(f"Error fetching identifiers: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def delete_identifier(app: "LocksmithApplication", aid: str) -> Dict[str, Any]:
+    """Delete a peer-discovery identifier from the Castellan server."""
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        response = await essr.request(
+            path=f"/identifiers/{urllib.parse.quote(aid, safe='')}",
+            method="DELETE",
+        )
+        if response is not None and response.status_code == 204:
+            return {'success': True}
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}"
+            }
+    except Exception as e:
+        logger.error(f"Error deleting identifier: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Intra-enterprise mailbox (multisig EXN relay)
+# ---------------------------------------------------------------------------
+
+async def post_message(
+    app: "LocksmithApplication",
+    recipient_aid: str,
+    topic: str,
+    raw: bytes,
+    sender_aid: Optional[str] = None,
+    multisig_alias: str = "",
+) -> Dict[str, Any]:
+    """
+    POST a CESR-encoded message to castellan /messages.
+
+    `sender_aid` is the castellan-uploaded identifier of the local participant.
+    `recipient_aid` is the target group participant's castellan-uploaded AID.
+    One call per recipient is required.
+
+    Returns dict with 'success' bool and, on success, the stored Message doc.
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    if not sender_aid:
+        return {'success': False, 'error': 'No sender AID provided for message post'}
+
+    try:
+        params = (
+            f"recipient={urllib.parse.quote(recipient_aid, safe='')}"
+            f"&sender={urllib.parse.quote(sender_aid, safe='')}"
+            f"&topic={urllib.parse.quote(topic, safe='')}"
+        )
+        if multisig_alias:
+            params += f"&multisig_alias={urllib.parse.quote(multisig_alias, safe='')}"
+        response = await essr.request(
+            path=f"/messages?{params}",
+            method="POST",
+            data=raw,
+            headers={"Content-Type": "application/cesr"},
+            timeout=30,
+        )
+        if response is not None and response.status_code in (200, 201):
+            return {'success': True, 'data': response.json()}
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}",
+            }
+    except Exception as e:
+        logger.error(f"Error posting message: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def fetch_messages(
+    app: "LocksmithApplication",
+    aid: Optional[str] = None,
+    topic: Optional[str] = None,
+    unread_only: bool = True,
+    page: int = 0,
+    page_size: int = 50,
+) -> Dict[str, Any]:
+    """
+    GET messages from castellan /messages for the given AID.
+
+    `aid` must be the castellan-uploaded identifier prefix; it is passed as an
+    explicit query param so castellan does not need to derive it from ESSR context.
+
+    Returns dict with 'success' bool and, on success, 'messages' list.
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    if not aid:
+        return {'success': False, 'error': 'No AID provided for message fetch'}
+
+    try:
+        params = [f"aid={urllib.parse.quote(aid, safe='')}", f"page={page}", f"page_size={page_size}"]
+        if topic:
+            params.append(f"topic={urllib.parse.quote(topic, safe='')}")
+        if unread_only:
+            params.append("unread=true")
+        path = f"/messages?{'&'.join(params)}"
+        response = await essr.request(path=path, method="GET")
+        if response is not None and response.status_code == 200:
+            data = response.json()
+            data['success'] = True
+            return data
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}",
+            }
+    except Exception as e:
+        logger.error(f"Error fetching messages: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def mark_message_read(
+    app: "LocksmithApplication",
+    message_id: str,
+) -> Dict[str, Any]:
+    """Mark a castellan mailbox message as read."""
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        response = await essr.request(
+            path=f"/messages/{urllib.parse.quote(message_id, safe='')}",
+            method="PUT",
+            json={},
+        )
+        if response is not None and response.status_code == 200:
+            return {'success': True}
+        else:
+            return {
+                'success': False,
+                'error': f"API error: {response.status_code if response else 'No response'}",
+            }
+    except Exception as e:
+        logger.error(f"Error marking message read: {e}")
         return {'success': False, 'error': str(e)}
 
 

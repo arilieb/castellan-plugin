@@ -403,7 +403,7 @@ class IssuedCredentialsListPage(QWidget):
                 local_sn=local_sn,
                 remote_sn=remote_sn,
                 revoked_credential={'said': said, 'schema_title': credential.get('schema_title')},
-                parent=self,
+                parent=self.parent(),
             )
             result = await _exec_dialog_async(dialog)
             found = True
@@ -473,7 +473,7 @@ class IssuedCredentialsListPage(QWidget):
                         issuer_aid=hab.pre,
                         local_sn=local_sn,
                         remote_sn=remote_sn,
-                        parent=self._parent,
+                        parent=self.parent(),
                     )
                     result = await _exec_dialog_async(dialog)
                     if result == QDialog.DialogCode.Accepted:
