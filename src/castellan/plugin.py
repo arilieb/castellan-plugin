@@ -66,7 +66,7 @@ class CastellanPlugin(
         from .credentials.issued.list import IssuedCredentialsListPage
         from .credentials.received.list import ReceivedCredentialsListPage
         from .issuers.list import IdentifiersListPage
-        from .issuers.multisig.initiate import InitiateMultisigPage
+        # from .issuers.multisig.initiate import InitiateMultisigPage
         from .setup import CastellanAdminSetupPage
 
         castellan_setup = CastellanAdminSetupPage(app, self.parent)
@@ -78,9 +78,9 @@ class CastellanPlugin(
             "castellan_issuers": IdentifiersListPage(
                 app, on_navigate_to_multisig_init=self._navigate_to_multisig_init, parent=None
             ),
-            "castellan_multisig_init": InitiateMultisigPage(
-                app, on_complete=self._on_multisig_init_complete, parent=None
-            ),
+            # "castellan_multisig_init": InitiateMultisigPage(
+            #     app, on_complete=self._on_multisig_init_complete, parent=None
+            # ),
             "castellan_setup": castellan_setup,
             "castellan_placeholder": CastellanPlaceholderPage("castellan", None),
         }
@@ -200,7 +200,7 @@ class CastellanPlugin(
 
         if settings:
             self.reset_essr(vault)
-            self._start_multisig_listening(vault)
+            # self._start_multisig_listening(vault)
 
     def on_vault_closed(self, vault: "Vault") -> None:
         self._stop_multisig_listening(vault)
@@ -415,7 +415,8 @@ class CastellanPlugin(
         """Handle vault-level doer events relevant to the castellan plugin."""
         self.reset_essr(self._app.vault)
         if self._identifier_poller is None:
-            self._start_multisig_listening(self._app.vault)
+            # self._start_multisig_listening(self._app.vault)
+            pass
         self._show_issued_credentials()
 
     def get_menu_entry(self) -> MenuButton:
