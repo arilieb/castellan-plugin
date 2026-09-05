@@ -114,7 +114,7 @@ class CastellanPlugin(
         if vault_page:
             vault_page.nav_menu.push_plugin_menu("castellan")
             vault_page._show_page("castellan_issued_credentials")
-            create_page = self._pages.get("castellan_issued_credentialss")
+            create_page = self._pages.get("castellan_issued_credentials")
             if create_page and hasattr(create_page, "on_show"):
                 create_page.on_show()
 
@@ -203,7 +203,7 @@ class CastellanPlugin(
             # self._start_multisig_listening(vault)
 
     def on_vault_closed(self, vault: "Vault") -> None:
-        self._stop_multisig_listening(vault)
+        # self._stop_multisig_listening(vault)
         vault.plugin_state.pop("castellan", None)
         if self._db:
             self._db.close()
@@ -400,7 +400,7 @@ class CastellanPlugin(
             logger.exception("Error handling new notification in CastellanPlugin")
 
     def on_plugin_reset(self, vault: "Vault") -> None:
-        self._stop_multisig_listening(vault)
+        # self._stop_multisig_listening(vault)
         if self._db:
             self._db.close(clear=True)
             self._db = None
