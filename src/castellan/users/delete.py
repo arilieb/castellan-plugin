@@ -1,11 +1,10 @@
 # -*- encoding: utf-8 -*-
 """
-castellan.issuers.delete module
+castellan.users.delete module
 
-Dialog for deleting a peer-discovery identifier from the Castellan server.
+Dialog for deleting a user account from the Castellan server.
 """
-from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import qasync
 from keri import help
@@ -20,59 +19,58 @@ if TYPE_CHECKING:
 logger = help.ogler.getLogger(__name__)
 
 
-class DeleteIdentifierDialog(LocksmithResourceDeletionDialog):
-    """Dialog for confirming and deleting an identifier from the Castellan server."""
+class DeleteUserDialog(LocksmithResourceDeletionDialog):
+    """Dialog for confirming and executing user account deletion."""
 
     def __init__(
         self,
         app: "LocksmithApplication",
-        alias: str,
-        aid: str,
+        user_name: str,
+        user_id: str,
         on_success: Callable[[str], None] | None = None,
-        parent = None,
+        parent: "VaultPage | None" = None,
     ):
         self.app = app
-        self.alias = alias
-        self.aid = aid
+        self.user_id = user_id
         self.on_success = on_success
 
         super().__init__(
-            resource_type="issuer",
-            resource_name=alias,
+            resource_type="user",
+            resource_name=user_name,
             title_icon=":/assets/material-icons/delete.svg",
             parent=parent,
         )
 
+        # Reconnect delete button to our async handler
         self.delete_button.clicked.disconnect()
         self.delete_button.clicked.connect(self._do_delete)
 
     @qasync.asyncSlot()
     async def _do_delete(self):
+        """Execute the delete operation."""
         self.delete_button.setEnabled(False)
         self.delete_button.setText("Deleting...")
         self.cancel_button.setEnabled(False)
 
         try:
-            result = await remoting.delete_identifier(self.app, self.aid)
+            result = await remoting.delete_account(self.app, self.user_id)
 
             if not result.get('success'):
-                error_msg = result.get('error', 'Unknown error occurred')
-                self.show_error(f"Deletion failed: {error_msg}")
-                self.delete_button.setEnabled(True)
-                self.delete_button.setText("Delete")
-                self.cancel_button.setEnabled(True)
+                error_msg = result.get('error', 'Unknown error')
+                self.show_error(f"Failed to delete user: {error_msg}")
                 return
 
-            logger.info(f"Identifier {self.aid} deleted from Castellan server")
-
+            # Success
             if self.on_success:
-                self.on_success(self.aid)
+                self.on_success(self.user_id)
 
             self.accept()
 
         except Exception as exc:
-            logger.exception(f"DeleteIdentifierDialog: deletion failed: {exc}")
-            self.show_error(f"Deletion failed: {exc}")
+            logger.exception(f"Error deleting user: {exc}")
+            self.show_error(f"Error: {str(exc)}")
+
+        finally:
             self.delete_button.setEnabled(True)
             self.delete_button.setText("Delete")
             self.cancel_button.setEnabled(True)

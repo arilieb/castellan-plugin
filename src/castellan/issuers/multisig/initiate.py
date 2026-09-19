@@ -27,40 +27,36 @@ Differences from the whisper original:
 """
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import qasync
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton,
 )
-
+from keri.core.coring import randomNonce
+from locksmith.core import habbing
 from locksmith.ui import colors
-from locksmith.ui.toolkit.widgets.buttons import (
-    LocksmithButton, LocksmithInvertedButton,
-)
-from locksmith.ui.toolkit.widgets.dialogs import LocksmithResourceDeletionDialog
-from locksmith.ui.toolkit.widgets.fields import (
-    FloatingLabelComboBox, FloatingLabelLineEdit, LocksmithLineEdit,
-)
-from locksmith.ui.toolkit.widgets.page import LocksmithFormPage
-from locksmith.ui.toolkit.widgets.extensible import ExtensibleSelectorWidget
 from locksmith.ui.styles import get_monospace_font_family
+from locksmith.ui.toolkit.widgets.buttons import (
+    LocksmithButton,
+    LocksmithInvertedButton,
+)
+from locksmith.ui.toolkit.widgets.fields import FloatingLabelLineEdit, FloatingLabelComboBox
+from locksmith.ui.toolkit.widgets.page import LocksmithFormPage
 
+from .doers import CreateRegistryDoer
 from ...core import remoting
 from ...db.basing import MultisigIdentityState, MultisigInitState
-from .doers import GroupMultisigInceptDoer, CreateRegistryDoer
-from .poller import UploadedIdentifierPoller
+from ...setup import SegmentedToggle
 
 if TYPE_CHECKING:
     from locksmith.core.apping import LocksmithApplication
     from locksmith.ui.vault.page import VaultPage
 
 from keri import help
-from keri.vdr import credentialing as vdr_credentialing
 
 logger = help.ogler.getLogger(__name__)
 
@@ -98,6 +94,8 @@ class InitiateMultisigPage(LocksmithFormPage):
     users returning mid-setup land at the correct section.
     """
 
+    closed = Signal()
+
     def __init__(
         self,
         app: "LocksmithApplication",
@@ -113,15 +111,18 @@ class InitiateMultisigPage(LocksmithFormPage):
             parent=parent,
             header_content=header_content,
         )
-        self._reset_button = LocksmithInvertedButton("Reset")
+        self._reset_button = LocksmithInvertedButton("Cancel")
         self._reset_button.setFixedWidth(100)
         self._reset_button.clicked.connect(self._on_reset_clicked)
         self._parent = parent
         self.app = app
         self.on_complete = on_complete
-        self._poller: UploadedIdentifierPoller | None = None
         self._castellan_identifiers: list[dict] = []
         self._current_group_alias: str | None = None
+
+        # Threshold configuration tracking
+        self._account_rows: dict[str, QWidget] = {}
+        self._current_account_aid: str = ""
 
         self._setup_content()
 
@@ -133,314 +134,598 @@ class InitiateMultisigPage(LocksmithFormPage):
         layout = self.content_layout
 
         desc = QLabel(
-            "Set up a Castellan multisig identifier. You will upload your identifier to the "
-            "shared Castellan server, wait for peers to join, create a group multisig "
-            "identifier with those peers, and create a self-backed credential registry."
+            "Initiate a Castellan multi-participant issuer.  Please select other Users to join and once they do, complete"
+            " the setup process."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet(f"font-size: 15px; color: {colors.TEXT_SUBTLE};")
         layout.addWidget(desc)
-        layout.addSpacing(40)
+        layout.addSpacing(20)
 
-        # Section 1
-        self._build_section1(layout)
+        self._build_threshold_section()
+        self._current_account_row = self._create_account_row(
+            account_name="",  # Will be set when current account is loaded
+            account_aid="",
+            is_current_account=True,
+            show_delete=False
+        )
+        self._accounts_layout.addWidget(self._current_account_row)
 
-        # Section 2 (hidden initially)
-        self._section2 = QWidget()
-        self._section2.hide()
-        s2_layout = QVBoxLayout(self._section2)
-        s2_layout.setContentsMargins(0, 0, 0, 0)
-        s2_layout.setSpacing(0)
-        self._build_section2(s2_layout)
-        layout.addWidget(self._section2)
-
-        # Section 3 (hidden initially)
-        self._section3 = QWidget()
-        self._section3.hide()
-        s3_layout = QVBoxLayout(self._section3)
-        s3_layout.setContentsMargins(0, 0, 0, 0)
-        s3_layout.setSpacing(0)
-        self._build_section3(s3_layout)
-        layout.addWidget(self._section3)
-
-        # Section 4 (hidden initially)
-        self._section4 = QWidget()
-        self._section4.hide()
-        s4_layout = QVBoxLayout(self._section4)
-        s4_layout.setContentsMargins(0, 0, 0, 0)
-        s4_layout.setSpacing(0)
-        self._build_section4(s4_layout)
-        layout.addWidget(self._section4)
 
         # Footer — home for the Reset button whenever Create Group Identifier
-        # isn't on screen to sit next to (still visible once past section 1).
         self._reset_footer = QWidget()
-        self._reset_footer.hide()
         reset_footer_layout = QHBoxLayout(self._reset_footer)
+        reset_footer_layout.addStretch()
         reset_footer_layout.setContentsMargins(0, 0, 0, 0)
         self._reset_footer_layout = reset_footer_layout
-        reset_footer_layout.addStretch()
         reset_footer_layout.addWidget(self._reset_button)
-        reset_footer_layout.addStretch()
-        layout.addWidget(self._reset_footer)
+        reset_footer_layout.addSpacing(10)
+        # Continue button
+        continue_layout = QHBoxLayout()
+        continue_layout.addStretch()
+
+        self._continue_btn = LocksmithButton("Create")
+        self._continue_btn.setFixedWidth(100)
+        self._continue_btn.clicked.connect(self._on_threshold_continue)
+        self._reset_footer_layout.addWidget(self._continue_btn)
+        self._reset_footer_layout.addStretch()
 
         layout.addStretch()
+        layout.addWidget(self._reset_footer)
+        layout.addSpacing(20)
 
-    # -- Section 1: Choose and Upload Identifier -------------------------
+    # ------------------------------------------------------------------
+    # Section 1.5: Configure Account Thresholds
+    # ------------------------------------------------------------------
 
-    def _build_section1(self, layout: QVBoxLayout):
-        self._s1_header_lbl = QLabel("Choose Your Identifier")
-        self._s1_header_lbl.setStyleSheet(
-            f"font-weight: bold; font-size: 20px; color: {colors.TEXT_MENU};"
+    def _build_threshold_section(self):
+        """Build the threshold configuration section (revealed after Section 1)."""
+        self._threshold_section = QWidget()
+        section_layout = QVBoxLayout(self._threshold_section)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(16)
+
+        selector_label = QLabel("Enter name for Multisig Issuer")
+        selector_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.TEXT_MENU};")
+        section_layout.addWidget(selector_label)
+        section_layout.addSpacing(6)
+        self.multisig_alias = FloatingLabelLineEdit(label_text="Multisig Issuer Name")
+        self.multisig_alias.setFixedWidth(240)
+        section_layout.addWidget(self.multisig_alias)
+        section_layout.addSpacing(12)
+
+        # Description
+        desc = QLabel(
+            "Configure signing and rotation thresholds for each account participating "
+            "in this multisig or for the entire multisig. Use simple thresholds for whole numbers (e.g., '2') or "
+            "fractional thresholds for ratios (e.g., '1/3')."
         )
-        layout.addWidget(self._s1_header_lbl)
-        layout.addSpacing(6)
-        self._s1_subtext_lbl = QLabel(
-            "Select the single (non-group) identifier that will represent you "
-            "in the Castellan network. This identifier will be uploaded to "
-            "castellan so peers can discover you."
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"font-size: 13px; color: {colors.TEXT_SUBTLE};")
+        section_layout.addWidget(desc)
+        section_layout.addSpacing(12)
+
+        # Threshold mode toggle
+        self._threshold_toggle = SegmentedToggle([
+            ("simple", "Simple Signing Thresholds",
+             ":/assets/material-icons/tag.svg",
+             ":/assets/material-icons/tag-dark.svg"),
+            ("fractional", "Fractional Signing Thresholds",
+             ":/assets/material-icons/donut-small.svg",
+             ":/assets/material-icons/donut-small-dark.svg"),
+        ])
+        self._threshold_toggle.setFixedWidth(525)
+        self._threshold_toggle.valueChanged.connect(self._on_threshold_mode_changed)
+        section_layout.addWidget(self._threshold_toggle)
+        section_layout.addSpacing(20)
+
+        # Account selector
+        add_account_header_layout = QHBoxLayout()
+        add_account_header_layout.setSpacing(12)
+
+        selector_label = QLabel("Add Account to Multisig")
+        selector_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.TEXT_MENU};")
+        add_account_header_layout.addWidget(selector_label)
+        add_account_header_layout.addSpacing(324)
+
+        self._simple_threshold_label = QLabel("Signing Threshold")
+        self._simple_threshold_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.TEXT_MENU};")
+        self._simple_threshold_label.setFixedWidth(150)
+        add_account_header_layout.addWidget(self._simple_threshold_label)
+
+        self._rotation_threshold_label = QLabel("Rotation Threshold")
+        self._rotation_threshold_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.TEXT_MENU};")
+        self._rotation_threshold_label.setFixedWidth(150)
+        add_account_header_layout.addWidget(self._rotation_threshold_label)
+        add_account_header_layout.addStretch()
+
+        section_layout.addLayout(add_account_header_layout)
+
+        section_layout.addSpacing(6)
+
+        add_account_body_layout = QHBoxLayout()
+        add_account_body_layout.setSpacing(12)
+
+        self._account_dropdown = FloatingLabelComboBox(label_text="Select Account")
+        self._account_dropdown.setFixedWidth(450)
+        self._account_dropdown.currentIndexChanged.connect(self._on_account_selected)
+        add_account_body_layout.addWidget(self._account_dropdown)
+        add_account_body_layout.addSpacing(50)
+
+        self.signing_input = FloatingLabelLineEdit(label_text="")
+        self.signing_input.setFixedWidth(120)
+        self.signing_input.setPlaceholderText("e.g., 1, 2, etc")
+        self.signing_input.line_edit.textChanged.connect(lambda: self._validate_threshold_input(self.signing_input))
+        add_account_body_layout.addWidget(self.signing_input)
+        add_account_body_layout.addSpacing(34)
+
+        self.rotation_input = FloatingLabelLineEdit(label_text="")
+        self.rotation_input.setFixedWidth(120)
+        self.rotation_input.setPlaceholderText("e.g., 1, 2, etc")
+        self.rotation_input.line_edit.textChanged.connect(lambda: self._validate_threshold_input(self.rotation_input))
+        add_account_body_layout.addWidget(self.rotation_input)
+        add_account_body_layout.addStretch()
+
+        section_layout.addLayout(add_account_body_layout)
+
+
+        instruction = QLabel("Select an account from the dropdown to add them to the multisig group.")
+        instruction.setStyleSheet(f"font-size: 12px; color: {colors.TEXT_SUBTLE}; font-style: italic;")
+        section_layout.addWidget(instruction)
+
+        section_layout.addSpacing(20)
+
+        # Column headers
+        headers_layout = QHBoxLayout()
+        headers_layout.setSpacing(12)
+
+        # Account Name header (flex width)
+        name_header = QLabel("Account Name")
+        name_header.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.TEXT_MENU};")
+        headers_layout.addWidget(name_header)
+        headers_layout.addSpacing(105)
+
+        # Signing Threshold header (fixed width: 150px)
+        self.signing_header = QLabel("Signing Threshold")
+        self.signing_header.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.TEXT_MENU};")
+        self.signing_header.setFixedWidth(150)
+        self.signing_header.setVisible(False)
+        headers_layout.addWidget(self.signing_header)
+
+        # Rotation Threshold header (fixed width: 150px)
+        self.rotation_header = QLabel("Rotation Threshold")
+        self.rotation_header.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.TEXT_MENU};")
+        self.rotation_header.setFixedWidth(150)
+        self.rotation_header.setVisible(False)
+        headers_layout.addWidget(self.rotation_header)
+
+        # Spacer for delete icon column (40px)
+        headers_layout.addStretch()
+
+        section_layout.addLayout(headers_layout)
+        section_layout.addSpacing(8)
+
+
+        # Container for dynamically added account rows
+        self._accounts_container = QWidget()
+        self._accounts_layout = QVBoxLayout(self._accounts_container)
+        self._accounts_layout.setContentsMargins(0, 0, 0, 0)
+        self._accounts_layout.setSpacing(4)
+        section_layout.addWidget(self._accounts_container)
+        section_layout.addSpacing(16)
+
+
+        self.content_layout.addWidget(self._threshold_section)
+
+    def _create_account_row(
+        self,
+        account_name: str,
+        account_aid: str = "",
+        is_current_account: bool = False,
+        show_delete: bool = True
+    ) -> QWidget:
+        """Create a single account row with threshold inputs and optional delete button."""
+        row_widget = QWidget()
+        row_widget.setFixedHeight(66)
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 8, 0, 8)
+        row_layout.setSpacing(12)
+
+        # Account name label
+        name_label = QLabel(account_name + (" (You)" if is_current_account else ""))
+        if is_current_account:
+            name_label.setStyleSheet(f"font-weight: 600; font-size: 13px; color: {colors.PRIMARY};")
+        else:
+            name_label.setStyleSheet(f"font-size: 13px; color: {colors.TEXT_MENU};")
+        name_label.setFixedWidth(150)
+        row_layout.addWidget(name_label)
+        row_layout.addSpacing(63)
+
+        # Signing threshold input
+        signing_input = FloatingLabelLineEdit(label_text="")
+        signing_input.setFixedWidth(120)
+        signing_input.setPlaceholderText("e.g., 2 or 1/3")
+        signing_input.line_edit.textChanged.connect(lambda: self._validate_threshold_input(signing_input))
+        row_layout.addWidget(signing_input)
+        row_layout.addSpacing(35)
+
+        # Rotation threshold input
+        rotation_input = FloatingLabelLineEdit(label_text="")
+        rotation_input.setFixedWidth(120)
+        rotation_input.setPlaceholderText("e.g., 2 or 1/3")
+        rotation_input.line_edit.textChanged.connect(lambda: self._validate_threshold_input(rotation_input))
+        row_layout.addWidget(rotation_input)
+        row_layout.addStretch()
+
+                # Delete button (or spacer if current account)
+        if show_delete:
+            delete_btn = QPushButton()
+            delete_btn.setIcon(QIcon(":/assets/material-icons/delete.svg"))
+            delete_btn.setFixedSize(32, 32)
+            delete_btn.setFlat(True)
+            delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            delete_btn.setStyleSheet("""
+                QPushButton {
+                    border: none;
+                    background: transparent;
+                }
+                QPushButton:hover {
+                    background: #f0f0f0;
+                    border-radius: 16px;
+                }
+            """)
+            delete_btn.clicked.connect(lambda: self._remove_account_row(row_widget))
+            row_layout.addWidget(delete_btn)
+        else:
+            row_layout.addSpacing(40)
+
+        row_widget.setFixedWidth(540)
+
+        # Store references for threshold visibility toggling
+        row_widget._signing_input = signing_input  # type: ignore
+        row_widget._rotation_input = rotation_input  # type: ignore
+        row_widget._account_aid = account_aid  # type: ignore
+        row_widget._is_current = is_current_account  # type: ignore
+        row_widget._name_label = name_label  # type: ignore
+
+        # Initially hide threshold inputs (simple mode by default)
+        signing_input.setVisible(False)
+        rotation_input.setVisible(False)
+
+        return row_widget
+
+    @qasync.asyncSlot()
+    async def _load_accounts(self):
+        """Load accounts from Castellan server and populate dropdown."""
+        if not self.app or not self.app.vault:
+            return
+
+        try:
+            # Fetch all accounts (unpaginated for simplicity)
+            result = await remoting.fetch_accounts(
+                app=self.app,
+                page=0,
+                page_size=100,  # Assume reasonable limit
+                filter_term=None,
+                order=None
+            )
+
+            if not result.get('success'):
+                logger.error(f"Failed to load accounts: {result.get('error')}")
+                self.show_error("Failed to load accounts from server")
+                return
+
+            accounts = result.get('accounts', [])
+
+            # Clear dropdown
+            self._account_dropdown.clear()
+            self._account_dropdown.addItem("Select account...", userData=None)
+
+            # Get current account AID (from vault state or ESSR context)
+            current_aid = self._get_current_account_aid()
+            self._current_account_aid = current_aid
+
+            # Populate dropdown (excluding current account)
+            for account in accounts:
+                aid = account.get('aid', '')
+                print(f"looking for {aid}")
+                username = account.get('username', '')
+
+                # Skip current account (it's always shown in the fixed row)
+                if aid == current_aid:
+                    # Set current account row name
+                    self._set_current_account_name(username, aid)
+                    continue
+
+                # Add to dropdown
+                display_name = f"{username} — {aid[:12]}..."
+                self._account_dropdown.addItem(display_name, userData=account)
+
+        except Exception as e:
+            logger.exception(f"Error loading accounts: {e}")
+            self.show_error(f"Error loading accounts: {str(e)}")
+
+    def _get_current_account_aid(self) -> str:
+        """Get the AID of the currently authenticated account."""
+        # Strategy 1: Check plugin state for current account
+        if self.app and self.app.vault:
+            state = self.app.vault.plugin_state.get("castellan", {})
+            settings = state.get("settings")
+            print(settings)
+            if settings and hasattr(settings, 'issuer_aid') and settings.issuer_aid:
+                return settings.issuer_aid
+
+        return ""
+
+    def _set_current_account_name(self, username: str, aid: str):
+        """Update the current account row with the username."""
+        if hasattr(self, '_current_account_row'):
+            # Find the name label in the row and update it
+            name_label = self._current_account_row._name_label  # type: ignore
+            if name_label:
+                name_label.setText(f"{username} (You)")
+            # Store the AID
+            self._current_account_row._account_aid = aid  # type: ignore
+
+    def _on_account_selected(self, index: int):
+        """Handle account selection from dropdown - add as new row."""
+        if index <= 0:  # Skip placeholder
+            return
+
+        account = self._account_dropdown.currentData()
+        if not account or not isinstance(account, dict):
+            return
+
+        aid = account.get('aid', '')
+        username = account.get('username', '')
+
+        # Prevent duplicates
+        if aid in self._account_rows:
+            logger.warning(f"Account {username} already added")
+            self._account_dropdown.setCurrentIndex(0)
+            return
+
+        # Create and add the row
+        row = self._create_account_row(
+            account_name=username,
+            account_aid=aid,
+            is_current_account=False,
+            show_delete=True
         )
-        self._s1_subtext_lbl.setWordWrap(True)
-        self._s1_subtext_lbl.setStyleSheet(
-            f"font-size: 13px; color: {colors.TEXT_SUBTLE}; font-weight: 200;"
+
+        self._accounts_layout.addWidget(row)
+        self._account_rows[aid] = row
+
+        # Apply current threshold visibility mode
+        self._update_threshold_visibility(row)
+
+        # Reset dropdown to placeholder
+        self._account_dropdown.setCurrentIndex(0)
+
+        logger.info(f"Added account: {username} ({aid})")
+
+    def _remove_account_row(self, row_widget: QWidget):
+        """Remove an account row from the UI and state."""
+        # Find the AID for this row
+        aid_to_remove: str = ""
+        for aid, row in self._account_rows.items():
+            if row == row_widget:
+                aid_to_remove = aid
+                break
+
+        if aid_to_remove:
+            # Remove from layout
+            self._accounts_layout.removeWidget(row_widget)
+            row_widget.deleteLater()
+
+            # Remove from tracking dict
+            del self._account_rows[aid_to_remove]
+
+            logger.info(f"Removed account: {aid_to_remove}")
+
+    def _on_threshold_mode_changed(self, mode: str):
+        """Handle threshold mode toggle - show/hide threshold inputs."""
+        show_thresholds = (mode == "fractional")
+
+        self._simple_threshold_label.setVisible(not show_thresholds)
+        self._rotation_threshold_label.setVisible(not show_thresholds)
+
+        self.signing_input.setVisible(not show_thresholds)
+        self.rotation_input.setVisible(not show_thresholds)
+
+        # Update current account row
+        self._update_threshold_visibility(self._current_account_row, show_thresholds)
+
+        # Update all added account rows
+        for row in self._account_rows.values():
+            self._update_threshold_visibility(row, show_thresholds)
+
+        logger.debug(f"Threshold mode changed to: {mode}")
+
+    def _update_threshold_visibility(self, row_widget: QWidget, show: Optional[bool] = None):
+        """Show or hide threshold inputs for a single row."""
+        if show is None:
+            # Determine from toggle state
+            show = (self._threshold_toggle.value() == "fractional")
+
+        # Access stored input references
+        self.signing_header.setVisible(show)
+        self.rotation_header.setVisible(show)
+        
+        if hasattr(row_widget, '_signing_input') and hasattr(row_widget, '_rotation_input'):
+            row_widget._signing_input.setVisible(show)
+            row_widget._rotation_input.setVisible(show)
+
+    def _validate_threshold_input(self, input_field: FloatingLabelLineEdit):
+        """Validate threshold input - accept integers or fractions (e.g., '2' or '1/3')."""
+        text = input_field.text().strip()
+
+        if not text:
+            # Empty is OK (will be validated on submit)
+            input_field.setStyleSheet("")
+            return True
+
+        # Check for integer
+        if text.isdigit():
+            input_field.setStyleSheet("")
+            return True
+
+        # Check for fraction (numerator/denominator)
+        if '/' in text:
+            parts = text.split('/')
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                numerator = int(parts[0])
+                denominator = int(parts[1])
+                if denominator > 0 and numerator <= denominator:
+                    input_field.setStyleSheet("")
+                    return True
+
+        # Invalid format
+        input_field.setStyleSheet("border: 1px solid #ff0000;")
+        return False
+
+    def _collect_threshold_data(self) -> dict[str, dict]:
+        """Collect threshold configuration for all accounts.
+
+        Returns:
+            Dict mapping AID to {'signing': str, 'rotation': str}
+        """
+        threshold_data = {}
+
+        # Collect from current account row
+        if hasattr(self, '_current_account_row'):
+            aid = self._current_account_row._account_aid  # type: ignore
+            if aid:
+                threshold_data[aid] = {
+                    'signing': self._current_account_row._signing_input.text().strip(),  # type: ignore
+                    'rotation': self._current_account_row._rotation_input.text().strip(),  # type: ignore
+                }
+
+        # Collect from added account rows
+        for aid, row in self._account_rows.items():
+            threshold_data[aid] = {
+                'signing': row._signing_input.text().strip(),
+                'rotation': row._rotation_input.text().strip(),
+            }
+
+        return threshold_data
+
+    @qasync.asyncSlot()
+    async def _on_threshold_continue(self):
+        """Validate threshold configuration and proceed to Section 2."""
+        # Validate all threshold inputs
+        alias = self.multisig_alias.text()
+        if not alias:
+            self.show_error("Please enter a multisig alias.")
+            return
+
+        threshold_type = self._threshold_toggle.value()
+        threshold_data = self._collect_threshold_data()
+
+        if threshold_type == "simple":
+            try:
+                simple_signing_threshold = int(self.signing_input.text().strip())
+                if simple_signing_threshold < 1:
+                    self.show_error("Please enter a simple signing threshold greater than 0.")
+                    return
+            except ValueError:
+                self.show_error("Please enter a valid simple signing threshold.")
+                return
+
+            try:
+                simple_rotation_threshold = int(self.rotation_input.text().strip())
+                if simple_rotation_threshold < 1:
+                    self.show_error("Please enter a simple rotation threshold greater than 0.")
+                    return
+            except ValueError:
+                self.show_error("Please enter a valid simple rotation threshold.")
+                return
+        else:
+            simple_signing_threshold = ""
+            simple_rotation_threshold = ""
+
+            if len(threshold_data) < 2:
+                self.show_error("Please add at least one other account to the multisig group.")
+                return
+
+            errors = []
+            for aid, thresholds in threshold_data.items():
+                aid_display = aid[:12] + "..." if len(aid) > 12 else aid
+
+                if not thresholds['signing']:
+                    errors.append(f"Missing signing threshold for account {aid_display}")
+                elif not self._validate_threshold_format(thresholds['signing']):
+                    errors.append(f"Invalid signing threshold format for account {aid_display}")
+
+                if not thresholds['rotation']:
+                    errors.append(f"Missing rotation threshold for account {aid_display}")
+                elif not self._validate_threshold_format(thresholds['rotation']):
+                    errors.append(f"Invalid rotation threshold format for account {aid_display}")
+
+            if errors:
+                self.show_error("\n".join(errors))
+                return
+
+        nonce = randomNonce()
+        local_member_hab = self.app.vault.hby.makeHab(f"{alias}_local_aid_{nonce}", ns="_castellan_multisig",
+                                                      icount=1, isith="1",
+                                                      ncount=1, nsith="1",
+                                                      toad=0, transferable=True)
+        kel = local_member_hab.replay()
+
+        multisig_data = dict(
+            alias=alias,
+            local_member_aid=local_member_hab.pre,
+            signing_threshold=simple_signing_threshold,
+            rotation_threshold=simple_rotation_threshold,
+            members=[(aid, thresholds['signing'], thresholds['rotation']) for aid, thresholds in threshold_data.items()]
         )
-        layout.addWidget(self._s1_subtext_lbl)
-        layout.addSpacing(6)
 
-        _s1_body = QWidget()
-        _s1_body_layout = QVBoxLayout(_s1_body)
-        _s1_body_layout.setContentsMargins(10, 0, 0, 0)
-        _s1_body_layout.setSpacing(0)
+        # Store threshold data in state for use in Section 3 (group creation)
+        await self._save_threshold_configuration(kel, multisig_data)
 
-        _s1_body_layout.addSpacing(20)
+        # Hide continue button and reveal Section 2
+        self._continue_btn.setEnabled(False)
+        self.show_success("Multisig identifier created.  Waiting for peers to join.")
+        logger.info(f"Threshold configuration saved: {threshold_data}")
 
-        self._s1_input = QWidget()
-        s1_in = QHBoxLayout(self._s1_input)
-        s1_in.setContentsMargins(0, 0, 0, 0)
-        self._id_dropdown = FloatingLabelComboBox("Your Identifier")
-        self._id_dropdown.setFixedWidth(380)
-        self._id_dropdown.currentIndexChanged.connect(self._on_identifier_changed)
-        s1_in.addWidget(self._id_dropdown)
-        s1_in.addSpacing(12)
-        self._upload_button = LocksmithButton("Upload to Castellan")
-        self._upload_button.setFixedWidth(200)
-        self._upload_button.clicked.connect(self._on_upload_clicked)
-        s1_in.addWidget(self._upload_button)
-        s1_in.addStretch()
-        _s1_body_layout.addWidget(self._s1_input)
+    @staticmethod
+    def _validate_threshold_format(threshold: str) -> bool:
+        """Validate threshold string format (int or fraction)."""
+        if threshold.isdigit():
+            return True
+        if '/' in threshold:
+            parts = threshold.split('/')
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                return int(parts[1]) > 0 and int(parts[0]) <= int(parts[1])
+        return False
 
-        self._id_aid_label = QLabel("")
-        self._id_aid_label.setStyleSheet(
-            f"font-size: 11px; color: {colors.TEXT_SUBTLE}; font-family: {get_monospace_font_family()};"
+    async def _save_threshold_configuration(self, kel: bytes, multisig_data: dict):
+        """Store threshold configuration and create multisig identifier on server."""
+        self._pending_threshold_config = multisig_data
+        logger.debug(f"Stored pending threshold configuration: {multisig_data}")
+
+        # Create multisig identifier on Castellan server
+        result = await remoting.create_multisig_identifier(
+            app=self.app,
+            kel=kel,
+            multisig_data=multisig_data
         )
-        _s1_body_layout.addWidget(self._id_aid_label)
 
-        self._s1_chosen = QWidget()
-        s1_ch = QVBoxLayout(self._s1_chosen)
-        s1_ch.setContentsMargins(0, 0, 0, 0)
-        s1_ch.setSpacing(4)
-        self._s1_chosen_name_lbl = QLabel("—")
-        self._s1_chosen_name_lbl.setStyleSheet(
-            f"font-size: 15px; font-weight: 600; color: {colors.TEXT_MENU};"
-        )
-        s1_ch.addWidget(self._s1_chosen_name_lbl)
-        self._s1_chosen_aid_lbl = QLabel("—")
-        self._s1_chosen_aid_lbl.setStyleSheet(
-            f"font-size: 11px; color: {colors.TEXT_SUBTLE}; font-family: {get_monospace_font_family()};"
-        )
-        s1_ch.addWidget(self._s1_chosen_aid_lbl)
-        self._s1_chosen.hide()
-        _s1_body_layout.addWidget(self._s1_chosen)
+        if not result.get('success'):
+            error_msg = result.get('error', 'Unknown error')
+            logger.error(f"Failed to create multisig identifier: {error_msg}")
+            self.show_error(f"Failed to create multisig on server: {error_msg}")
+            # Re-enable continue button on failure
+            self._continue_btn.setEnabled(True)
+            return
 
-        layout.addWidget(_s1_body)
-        layout.addSpacing(40)
+        logger.info(f"Successfully created multisig identifier on server: {result.get('data')}")
+        self._reset_button.setText("Done")
+        self._continue_btn.setEnabled(False)
 
-    # -- Section 2: Wait for Peers --------------------------------------
-
-    def _build_section2(self, layout: QVBoxLayout):
-        self._s2_header_lbl = QLabel("Waiting for Peers")
-        self._s2_header_lbl.setStyleSheet(
-            f"font-weight: bold; font-size: 20px; color: {colors.TEXT_MENU};"
-        )
-        layout.addWidget(self._s2_header_lbl)
-        layout.addSpacing(6)
-        self._s2_subtext_lbl = QLabel(
-            "Your identifier has been uploaded. Waiting for at least one peer to "
-            "join before group identifier creation can begin."
-        )
-        self._s2_subtext_lbl.setWordWrap(True)
-        self._s2_subtext_lbl.setStyleSheet(
-            f"font-size: 13px; color: {colors.TEXT_SUBTLE}; font-weight: 200;"
-        )
-        layout.addWidget(self._s2_subtext_lbl)
-        layout.addSpacing(6)
-
-        _s2_body = QWidget()
-        _s2_body_layout = QVBoxLayout(_s2_body)
-        _s2_body_layout.setContentsMargins(10, 0, 0, 0)
-        _s2_body_layout.setSpacing(0)
-
-        _s2_body_layout.addSpacing(12)
-
-        self._peer_count_label = QLabel("0 peer(s) have joined castellan")
-        self._peer_count_label.setStyleSheet(
-            f"font-size: 14px; color: {colors.TEXT_SUBTLE};"
-        )
-        _s2_body_layout.addWidget(self._peer_count_label)
-
-        layout.addWidget(_s2_body)
-        layout.addSpacing(40)
-
-    # -- Section 3: Create Group Identifier -----------------------------
-
-    def _build_section3(self, layout: QVBoxLayout):
-        self._s3_header_lbl = QLabel("Create Group Identifier or Wait to Join a Group")
-        self._s3_header_lbl.setStyleSheet(
-            f"font-weight: bold; font-size: 20px; color: {colors.TEXT_MENU};"
-        )
-        layout.addWidget(self._s3_header_lbl)
-        layout.addSpacing(6)
-        self._s3_subtext_lbl = QLabel(
-            "Select peers to include in your group multisig identifier and create it, "
-            "or wait here — if a peer invites you to join their group you will receive "
-            "a notification to accept.",
-        )
-        self._s3_subtext_lbl.setWordWrap(True)
-        self._s3_subtext_lbl.setStyleSheet(
-            f"font-size: 13px; color: {colors.TEXT_SUBTLE}; font-weight: 200;"
-        )
-        layout.addWidget(self._s3_subtext_lbl)
-        layout.addSpacing(6)
-
-        _s3_body = QWidget()
-        _s3_body_layout = QVBoxLayout(_s3_body)
-        _s3_body_layout.setContentsMargins(10, 0, 0, 0)
-        _s3_body_layout.setSpacing(0)
-
-        _s3_body_layout.addSpacing(12)
-
-        self._group_alias_field = FloatingLabelLineEdit("Group Identifier Alias")
-        self._group_alias_field.setFixedWidth(500)
-        _s3_body_layout.addWidget(self._group_alias_field)
-        _s3_body_layout.addSpacing(16)
-
-        participants_lbl = QLabel("Group Participants")
-        participants_lbl.setStyleSheet("font-weight: 600; font-size: 14px;")
-        _s3_body_layout.addWidget(participants_lbl)
-
-        self._participants_container = QWidget()
-        self._participants_container_layout = QVBoxLayout(self._participants_container)
-        self._participants_container_layout.setContentsMargins(0, 0, 0, 0)
-        self._participants_selector: ExtensibleSelectorWidget | None = None
-        _s3_body_layout.addWidget(self._participants_container)
-        _s3_body_layout.addSpacing(4)
-
-        # Frozen participant list (replaces selector when section 3 is locked)
-        self._s3_frozen_participants_widget = QWidget()
-        self._s3_frozen_participants_widget.hide()
-        self._s3_frozen_participants_layout = QVBoxLayout(self._s3_frozen_participants_widget)
-        self._s3_frozen_participants_layout.setContentsMargins(0, 0, 0, 0)
-        self._s3_frozen_participants_layout.setSpacing(0)
-        _s3_body_layout.addWidget(self._s3_frozen_participants_widget)
-
-        _s3_body_layout.addSpacing(8)
-
-        self._s3_self_widget = QWidget()
-        s3_self_vbox = QVBoxLayout(self._s3_self_widget)
-        s3_self_vbox.setContentsMargins(8, 0, 0, 0)
-        s3_self_vbox.setSpacing(4)
-        self._s3_self_name_lbl = QLabel("—")
-        self._s3_self_name_lbl.setStyleSheet(
-            f"font-size: 15px; font-weight: 600; color: {colors.TEXT_MENU};"
-        )
-        s3_self_vbox.addWidget(self._s3_self_name_lbl)
-        self._s3_self_aid_lbl = QLabel("—")
-        self._s3_self_aid_lbl.setStyleSheet(
-            f"font-size: 11px; color: {colors.TEXT_SUBTLE}; font-family: {get_monospace_font_family()};"
-        )
-        s3_self_vbox.addWidget(self._s3_self_aid_lbl)
-        _s3_body_layout.addWidget(self._s3_self_widget)
-        _s3_body_layout.addSpacing(16)
-
-        thresholds_lbl = QLabel("Thresholds")
-        thresholds_lbl.setStyleSheet("font-weight: 600; font-size: 14px;")
-        _s3_body_layout.addWidget(thresholds_lbl)
-
-        thresh_row = QHBoxLayout()
-        self._signing_threshold = FloatingLabelLineEdit("Signing Threshold")
-        self._signing_threshold.setText("1")
-        self._signing_threshold.setFixedWidth(240)
-        thresh_row.addWidget(self._signing_threshold)
-        thresh_row.addSpacing(8)
-        self._rotation_threshold = FloatingLabelLineEdit("Rotation Threshold")
-        self._rotation_threshold.setText("1")
-        self._rotation_threshold.setFixedWidth(240)
-        thresh_row.addWidget(self._rotation_threshold)
-        thresh_row.addStretch()
-        _s3_body_layout.addLayout(thresh_row)
-        _s3_body_layout.addSpacing(20)
-
-        toad_row = QHBoxLayout()
-        toad_lbl = QLabel("Threshold of Acceptable Duplicity: ")
-        toad_lbl.setStyleSheet("font-size: 14px;")
-        toad_row.addWidget(toad_lbl)
-        self._toad_field = LocksmithLineEdit()
-        self._toad_field.setText("0")
-        self._toad_field.setFixedWidth(50)
-        self._toad_field.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        toad_row.addWidget(self._toad_field)
-        toad_row.addStretch()
-        _s3_body_layout.addLayout(toad_row)
-        _s3_body_layout.addSpacing(20)
-
-        btn_row = QHBoxLayout()
-        self._s3_btn_row = btn_row
-        btn_row.setSpacing(12)
-        btn_row.addStretch()
-        self._create_group_button = LocksmithButton("Create Group Identifier")
-        self._create_group_button.setFixedWidth(220)
-        self._create_group_button.clicked.connect(self._on_create_group_clicked)
-        btn_row.addWidget(self._create_group_button)
-        btn_row.addStretch()
-        _s3_body_layout.addLayout(btn_row)
-
-        layout.addWidget(_s3_body)
-        layout.addSpacing(40)
-
-    # -- Section 4: Progress --------------------------------------------
-    def _build_section4(self, layout: QVBoxLayout):
-        self._s4_header_lbl = QLabel("Initializing…")
-        self._s4_header_lbl.setStyleSheet(f"font-weight: bold; font-size: 20px; color: {colors.TEXT_MENU};")
-        layout.addWidget(self._s4_header_lbl)
-        layout.addSpacing(6)
-        self._s4_subtext_lbl = QLabel("Coordinating signatures across participants.")
-        self._s4_subtext_lbl.setWordWrap(True)
-        self._s4_subtext_lbl.setStyleSheet(f"font-size: 13px; color: {colors.TEXT_SUBTLE}; font-weight: 200;")
-        layout.addWidget(self._s4_subtext_lbl)
-        layout.addSpacing(6)
-
-        _s4_body = QWidget()
-        _s4_body_layout = QVBoxLayout(_s4_body)
-        _s4_body_layout.setContentsMargins(10, 0, 0, 0)
-        _s4_body_layout.setSpacing(0)
-
-        _s4_body_layout.addSpacing(12)
-
-        self._round1_frame, self._round1_participants_layout = self._make_progress_frame(
-            "Step 1 of 2 — Group Identifier"
-        )
-        _s4_body_layout.addWidget(self._round1_frame)
-        _s4_body_layout.addSpacing(12)
-
-        self._round2_frame, self._round2_participants_layout = self._make_progress_frame(
-            "Step 2 of 2 — Registry"
-        )
-        _s4_body_layout.addWidget(self._round2_frame)
-
-        layout.addWidget(_s4_body)
-        layout.addSpacing(40)
-
-    def _make_progress_frame(self, title: str) -> tuple["QFrame", "QVBoxLayout"]:
+    @staticmethod
+    def _make_progress_frame(title: str) -> tuple["QFrame", "QVBoxLayout"]:
         frame = QFrame()
         frame.setStyleSheet(
             f"QFrame {{ border: 1px solid {colors.BORDER}; border-radius: 8px; "
@@ -506,6 +791,14 @@ class InitiateMultisigPage(LocksmithFormPage):
         if db is not None:
             db.castellan_multisig_init.pin(keys=(state.group_alias,), val=state)
 
+    def _save_threshold_config_to_group_state(self, group_alias: str):
+        """Save the pending threshold configuration to the group state."""
+        if hasattr(self, '_pending_threshold_config'):
+            state = self._get_group_state(group_alias)
+            state.threshold_config = self._pending_threshold_config
+            self._save_group_state(state)
+            logger.info(f"Saved threshold config to group state for {group_alias}")
+
     def _find_incomplete_group_alias(self) -> str | None:
         """Find the most recent in-progress (not yet complete) group-setup attempt."""
         db = self._get_db()
@@ -523,584 +816,48 @@ class InitiateMultisigPage(LocksmithFormPage):
     def showEvent(self, event):
         """Qt lifecycle hook — fires whenever setCurrentWidget makes us visible."""
         super().showEvent(event)
-        if self.app.vault:
-            self.on_show()
+
 
     def on_show(self):
         """Called when the page becomes visible. Resumes any in-progress attempt."""
         self.clear_error()
         self.clear_success()
-
-        # Reset all progressive sections — required when switching vaults so
-        # that sections revealed for a previous vault are hidden for the new one.
-        self._section2.hide()
-        self._section3.hide()
-        self._section4.hide()
-
-        self._s1_header_lbl.setText("Choose Your Identifier")
-        self._s1_subtext_lbl.setText(
-            "Select the single (non-group) identifier that will represent you "
-            "in the Castellan network. This identifier will be uploaded to "
-            "castellan so peers can discover you."
-        )
-        self._s1_input.show()
-        self._id_aid_label.show()
-        self._s1_chosen.hide()
-
-        # Unlock section 3 by default — required so a group flow that fully
-        # completed since the last on_show() doesn't leave stale frozen
-        # fields behind. Re-locked below if an in-progress attempt is found.
-        self._unlock_section3()
-
-        if self._poller is not None:
-            try:
-                self._poller.signals.identifiers_changed.disconnect(self._on_identifiers_changed)
-            except Exception:
-                pass
-            self._poller = None
-        self._castellan_identifiers = []
-        self._round1_participant_labels: dict[str, "QLabel"] = {}
-        self._round2_participant_labels: dict[str, "QLabel"] = {}
-
-        self._load_identifier_dropdown()
-
-        identity = self._get_identity_state()
-
-        if identity.identifier_uploaded:
-            hab = self.app.vault.hby.habByName(identity.chosen_identifier_alias) if identity.chosen_identifier_alias else None
-            if hab:
-                self._apply_s1_uploaded(identity.chosen_identifier_alias, hab.pre)
-            self._section2.show()
-            self._start_poller()
-
-            self._current_group_alias = self._find_incomplete_group_alias()
-
-            if self._current_group_alias:
-                state = self._get_group_state(self._current_group_alias)
-                self._section3.show()
-                self._populate_section3(state, identity)
-
-                _show_s4 = state.init_step >= 4 or (state.init_step == 3 and state.section4_started)
-
-                if _show_s4:
-                    smids = self._get_group_smids(self._current_group_alias)
-                    if smids:
-                        if state.init_step == 3 and state.section4_started:
-                            from keri.core import coring as _kc
-                            _ghab = self.app.vault.hby.habByName(self._current_group_alias)
-                            if _ghab is not None:
-                                _pfx = _kc.Prefixer(qb64=_ghab.pre)
-                                _seq = _kc.Seqner(sn=0)
-                                if self.app.vault.counselor.complete(_pfx, _seq):
-                                    state.init_step = 4
-                                    if not state.group_signed_aids:
-                                        state.group_signed_aids = list(smids)
-                                    self._save_group_state(state)
-
-                        self._lock_section3(state, smids, identity)
-                        self._section4.show()
-
-                        self._build_signing_rows(
-                            self._round1_participants_layout,
-                            self._round1_participant_labels,
-                            smids,
-                            state.group_signed_aids,
-                        )
-                        self._build_signing_rows(
-                            self._round2_participants_layout,
-                            self._round2_participant_labels,
-                            smids,
-                            state.registry_signed_aids,
-                        )
-
-                        if state.init_step >= 4 and not state.init_complete:
-                            registry_name = f"{self._current_group_alias}-registry"
-                            registry = self.app.vault.rgy.registryByName(registry_name)
-                            if registry is not None:
-                                _reg = vdr_credentialing.Registrar(
-                                    hby=self.app.vault.hby,
-                                    rgy=self.app.vault.rgy,
-                                    counselor=self.app.vault.counselor,
-                                )
-                                if _reg.complete(pre=registry.regk, sn=0):
-                                    self._on_init_complete(registry.regk)
-                                elif state.is_proposer:
-                                    self._launch_create_registry_doer(self._current_group_alias)
-                            elif state.is_proposer:
-                                self._launch_create_registry_doer(self._current_group_alias)
-
-        # Reconnect doer event listener for the current vault.
-        if self.app.vault and hasattr(self.app.vault, "signals"):
-            try:
-                self.app.vault.signals.doer_event.disconnect(self._on_doer_event)
-            except Exception:
-                pass
-            self.app.vault.signals.doer_event.connect(self._on_doer_event)
-
-        self._sync_reset_button_placement()
-
-    # ------------------------------------------------------------------
-    # Reset
-    # ------------------------------------------------------------------
-
-    def _place_reset_next_to_create(self):
-        self._reset_footer_layout.removeWidget(self._reset_button)
-        if self._s3_btn_row.indexOf(self._reset_button) == -1:
-            create_idx = self._s3_btn_row.indexOf(self._create_group_button)
-            self._s3_btn_row.insertWidget(create_idx, self._reset_button)
-        self._reset_footer.hide()
-        self._reset_button.show()
-
-    def _place_reset_in_footer(self):
-        self._s3_btn_row.removeWidget(self._reset_button)
-        if self._reset_footer_layout.indexOf(self._reset_button) == -1:
-            self._reset_footer_layout.addWidget(self._reset_button)
-        self._reset_footer.show()
-        self._reset_button.show()
-
-    def _hide_reset_button(self):
-        self._s3_btn_row.removeWidget(self._reset_button)
-        self._reset_footer_layout.removeWidget(self._reset_button)
-        self._reset_button.hide()
-        self._reset_footer.hide()
-
-    def _sync_reset_button_placement(self):
-        """
-        Reset only makes sense once section 1 is behind us. From then on it
-        sits next to Create Group Identifier while that button is on screen,
-        otherwise it falls back to the page footer (section 2 only, or
-        section 3 locked into section 4's progress view).
-        """
-        identity = self._get_identity_state()
-        if not identity.identifier_uploaded:
-            self._hide_reset_button()
-            return
-        if self._section3.isVisible() and self._create_group_button.isVisible():
-            self._place_reset_next_to_create()
-        else:
-            self._place_reset_in_footer()
+        self._load_accounts()
 
     def _on_reset_clicked(self):
-        resource_name = self._current_group_alias or "Multi-Signature"
-        dialog = LocksmithResourceDeletionDialog(
-            parent=self._parent or self,
-            resource_type="setup",
-            resource_name=resource_name,
-            action_verb="Reset",
-        )
-        dialog.delete_button.clicked.disconnect(dialog.accept)
-        dialog.delete_button.clicked.connect(lambda: self._confirm_reset(dialog))
-        dialog.open()
-
-    def _confirm_reset(self, dialog: LocksmithResourceDeletionDialog):
-        dialog.accept()
-        self._do_reset()
-
-    @qasync.asyncSlot()
-    async def _do_reset(self):
-        """Clear all persisted progress for this page and redraw at section 1."""
         self._reset_button.setEnabled(False)
-        self._reset_button.setText("Resetting…")
+        self._reset_button.setText("Closing…")
         self.clear_error()
         self.clear_success()
 
-        if self._poller is not None:
-            try:
-                self.app.vault.remove([self._poller])
-            except Exception:
-                pass
-            self._poller = None
+        self.multisig_alias.setText("")
+        self.signing_input.setText("")
+        self.rotation_input.setText("")
 
-        db = self._get_db()
-        if db is not None:
-            db.castellan_multisig_identity.trim()
-            db.castellan_multisig_init.trim()
+        while self._accounts_layout.count():
+            item = self._accounts_layout.takeAt(0)
+            if item.widget():
+                w = item.widget()
+                w.setParent(None)
+
+        self._account_rows.clear()
+
+        settings = self.app.vault.plugin_state.get("castellan", {}).get("settings")
+        # Current account row (special - no delete button)
+        self._current_account_row = self._create_account_row(
+            account_name=settings.username if settings else "",  # Will be set when current account is loaded
+            account_aid=settings.issuer_aid if settings else "",
+            is_current_account=True,
+            show_delete=False
+        )
+        self._accounts_layout.addWidget(self._current_account_row)
 
         self._current_group_alias = None
         self._castellan_identifiers = []
 
-        self._reset_button.setText("Reset")
+        self._reset_button.setText("Cancel")
         self._reset_button.setEnabled(True)
-
-        self.on_show()
-        self.show_success("Multisig setup has been reset.")
-
-    # ------------------------------------------------------------------
-    # Section 1
-    # ------------------------------------------------------------------
-
-    def _load_identifier_dropdown(self):
-        """Populate dropdown with local non-group habs."""
-        if not self.app.vault:
-            return
-        from keri.app.habbing import GroupHab
-        self._id_dropdown.clear()
-        self._id_alias_map: dict[str, str] = {}
-        for aid, hab in self.app.vault.hby.habs.items():
-            if isinstance(hab, GroupHab):
-                continue
-            display = f"{hab.name} - {aid}"
-            self._id_alias_map[display] = aid
-            self._id_dropdown.addItem(display)
-        self._id_dropdown.setCurrentIndex(-1)
-
-    def _on_identifier_changed(self, index: int):
-        if index < 0:
-            self._id_aid_label.setText("")
-            return
-        display = self._id_dropdown.currentText()
-        aid = self._id_alias_map.get(display)
-        hab = self.app.vault.hby.habs.get(aid) if aid else None
-        if hab:
-            self._id_aid_label.setText(f"{hab.name} - {aid}")
-
-    def _apply_s1_uploaded(self, alias: str, aid: str):
-        """Swap section 1 from selection mode to confirmation mode."""
-        self._s1_header_lbl.setText("Your Identifier Has Been Chosen!")
-        self._s1_subtext_lbl.setText(
-            "This identifier has been uploaded to castellan and will represent "
-            "you in the shared network."
-        )
-        self._s1_chosen_name_lbl.setText(alias)
-        self._s1_chosen_aid_lbl.setText(aid)
-        self._s1_input.hide()
-        self._id_aid_label.hide()
-        self._s1_chosen.show()
-
-    @qasync.asyncSlot()
-    async def _on_upload_clicked(self):
-        identity = self._get_identity_state()
-        display = self._id_dropdown.currentText()
-        if not display:
-            self.show_error("Please select an identifier.")
-            return
-
-        aid = self._id_alias_map.get(display)
-        hab = self.app.vault.hby.habs.get(aid) if aid else None
-        if hab is None:
-            self.show_error("Selected identifier not found.")
-            return
-
-        oobi = ""
-        try:
-            oobi_result = hab.makeOwnEndRole()
-            if oobi_result:
-                oobi = oobi_result.decode() if isinstance(oobi_result, bytes) else str(oobi_result)
-        except Exception:
-            pass
-
-        try:
-            kel_bytes = b"".join(self.app.vault.hby.db.clonePreIter(pre=hab.pre, fn=0))
-        except Exception as e:
-            self.show_error(f"Failed to serialize KEL for upload: {e}")
-            return
-
-        if not kel_bytes:
-            self.show_error("No KEL events found for selected identifier — cannot upload.")
-            return
-
-        self._upload_button.setEnabled(False)
-        self._upload_button.setText("Uploading…")
-        self.clear_error()
-
-        result = await remoting.upload_identifier(self.app, aid=hab.pre, alias=hab.name, kel_bytes=kel_bytes, oobi=oobi)
-
-        self._upload_button.setEnabled(True)
-        self._upload_button.setText("Upload to Castellan")
-
-        if result.get("conflict"):
-            self.show_error(
-                f"The alias '{hab.name}' is already uploaded to castellan. "
-                "Rename your local identifier if this is your first upload."
-            )
-            return
-
-        if not result.get("success"):
-            self.show_error(f"Upload failed: {result.get('error', 'unknown error')}")
-            return
-
-        self.clear_error()
-        identity.chosen_identifier_alias = hab.name
-        identity.chosen_identifier_aid = hab.pre
-        identity.identifier_uploaded = True
-        self._save_identity_state(identity)
-
-        self._apply_s1_uploaded(hab.name, hab.pre)
-        self._section2.show()
-        self._scroll_to_bottom()
-        self._start_poller()
-        self._sync_reset_button_placement()
-
-    # ------------------------------------------------------------------
-    # Section 2
-    # ------------------------------------------------------------------
-
-    def _start_poller(self):
-        if self._poller is not None:
-            return
-        self._poller = UploadedIdentifierPoller(self.app)
-        self._poller.signals.identifiers_changed.connect(self._on_identifiers_changed)
-        self.app.vault.extend([self._poller])
-        self._poller._poll()
-
-    def _on_identifiers_changed(self, identifiers: list[dict]):
-        self._castellan_identifiers = identifiers
-        identity = self._get_identity_state()
-        chosen_hab = self.app.vault.hby.habByName(identity.chosen_identifier_alias) if identity.chosen_identifier_alias else None
-        chosen_aid = chosen_hab.pre if chosen_hab else ""
-        peers = [i for i in identifiers if i["aid"] != chosen_aid]
-
-        count = len(peers)
-        self._peer_count_label.setText(f"{count} peer(s) have joined castellan")
-
-        if count >= 1:
-            self._s2_header_lbl.setText("Castellan Peers are Available!")
-            self._s2_subtext_lbl.setText(
-                "Multiple Castellan peers are available to form a group identifier."
-            )
-            if not self._section3.isVisible():
-                self._section3.show()
-                self._populate_section3(
-                    self._get_group_state(self._current_group_alias) if self._current_group_alias else None,
-                    identity,
-                )
-                self._scroll_to_bottom()
-            else:
-                self._populate_section3(
-                    self._get_group_state(self._current_group_alias) if self._current_group_alias else None,
-                    identity,
-                )
-        else:
-            if self._section3.isVisible():
-                self._populate_section3(
-                    self._get_group_state(self._current_group_alias) if self._current_group_alias else None,
-                    identity,
-                )
-
-        self._sync_reset_button_placement()
-
-    # ------------------------------------------------------------------
-    # Section 3
-    # ------------------------------------------------------------------
-
-    def _populate_section3(self, state: MultisigInitState | None, identity: MultisigIdentityState):
-        """Populate participant selector from current castellan identifiers."""
-        hab = self.app.vault.hby.habByName(identity.chosen_identifier_alias) if identity.chosen_identifier_alias else None
-
-        chosen_aid = hab.pre if hab else ""
-        if hab:
-            self._s3_self_name_lbl.setText(identity.chosen_identifier_alias or "—")
-            self._s3_self_aid_lbl.setText(chosen_aid or "—")
-
-        # Skip rebuilding selector if a group flow is already locked
-        if state is not None and (state.section4_started or state.init_step >= 4):
-            return
-
-        items = [
-            (i["alias"], {"aid": i["aid"], "alias": i["alias"], "oobi": i.get("oobi", "")})
-            for i in self._castellan_identifiers
-            if i["aid"] != chosen_aid
-        ]
-
-        if self._participants_selector is not None:
-            self._participants_container_layout.removeWidget(self._participants_selector)
-            self._participants_selector.deleteLater()
-            self._participants_selector = None
-
-        self._participants_selector = ExtensibleSelectorWidget(
-            dropdown_label="Select Participant",
-            selector_dropdown_items=items,
-            parent=self,
-            max_scrollable_height=200,
-        )
-        self._participants_selector.setFixedWidth(500)
-        self._participants_container_layout.addWidget(self._participants_selector)
-
-    def _on_create_group_clicked(self):
-        identity = self._get_identity_state()
-        alias = self._group_alias_field.text().strip()
-        if not alias:
-            self.show_error("Please enter a group identifier alias.")
-            return
-
-        mhab = self.app.vault.hby.habByName(identity.chosen_identifier_alias) if identity.chosen_identifier_alias else None
-        if mhab is None:
-            self.show_error("Your signing identifier was not found in the vault.")
-            return
-
-        if self._participants_selector is None:
-            self.show_error("Participants selector not initialized.")
-            return
-
-        selected = self._participants_selector.get_selected_items()
-        if not selected:
-            self.show_error("Select at least one other participant.")
-            return
-
-        smids = [mhab.pre]
-        for _, data in selected:
-            aid = data.get("aid")
-            if aid and aid not in smids:
-                smids.append(aid)
-
-        isith = self._signing_threshold.text().strip() or "1"
-        nsith = self._rotation_threshold.text().strip() or "1"
-        toad = int(self._toad_field.text().strip() or "0")
-
-        self._current_group_alias = alias
-        state = MultisigInitState(group_alias=alias, is_proposer=True)
-        self._save_group_state(state)
-
-        self._create_group_button.setEnabled(False)
-        self._create_group_button.setText("Creating…")
-        self.clear_error()
-
-        doer = GroupMultisigInceptDoer(
-            app=self.app,
-            alias=alias,
-            mhab=mhab,
-            smids=smids,
-            isith=isith,
-            nsith=nsith,
-            toad=toad,
-            signal_bridge=self.app.vault.signals,
-        )
-        self.app.vault.extend([doer])
-
-    # ------------------------------------------------------------------
-    # Section 4
-    # ------------------------------------------------------------------
-
-    def _lock_section3(self, state: "MultisigInitState", smids: list[str], identity: MultisigIdentityState) -> None:
-        """Freeze all section 3 inputs and display frozen participant list."""
-        if state.is_proposer:
-            self._s3_header_lbl.setText("Group Identifier Created")
-            self._s3_subtext_lbl.setText(
-                "The fields below reflect the parameters of the created group identifier."
-            )
-        else:
-            self._s3_header_lbl.setText("Group Identifier Joined")
-            self._s3_subtext_lbl.setText(
-                "The fields below reflect the parameters of the group identifier you joined."
-            )
-
-        if not state.is_proposer:
-            self._group_alias_field.setText(state.group_alias)
-            self._signing_threshold.setText(state.group_isith or "1")
-            self._rotation_threshold.setText(state.group_nsith or "1")
-            self._toad_field.setText(state.group_toad or "0")
-        else:
-            self._group_alias_field.setText(state.group_alias)
-
-        self._group_alias_field.setReadOnly(True)
-        self._signing_threshold.setReadOnly(True)
-        self._rotation_threshold.setReadOnly(True)
-        self._toad_field.setReadOnly(True)
-        self._create_group_button.hide()
-
-        self._participants_container.hide()
-        while self._s3_frozen_participants_layout.count():
-            item = self._s3_frozen_participants_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        own_aid = identity.chosen_identifier_aid
-        others = [aid for aid in smids if aid != own_aid]
-
-        if len(others) > 4:
-            from PySide6.QtWidgets import QScrollArea
-            scroll = QScrollArea()
-            scroll.setMaximumHeight(260)
-            scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.Shape.NoFrame)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            container = QWidget()
-            c_layout = QVBoxLayout(container)
-            c_layout.setContentsMargins(0, 0, 0, 0)
-            c_layout.setSpacing(0)
-            for aid in others:
-                c_layout.addWidget(self._make_participant_label_row(aid))
-            scroll.setWidget(container)
-            self._s3_frozen_participants_layout.addWidget(scroll)
-        else:
-            for aid in others:
-                self._s3_frozen_participants_layout.addWidget(self._make_participant_label_row(aid))
-
-        self._s3_frozen_participants_widget.show()
-
-    def _unlock_section3(self) -> None:
-        """
-        Restore section 3 to its pristine editable state (inverse of
-        _lock_section3). Called from on_show() whenever there is no
-        in-progress group attempt, so a fully-completed (or never-started)
-        flow doesn't leave stale frozen fields behind for the next attempt.
-        """
-        self._s3_header_lbl.setText("Create Group Identifier or Wait to Join a Group")
-        self._s3_subtext_lbl.setText(
-            "Select peers to include in your group multisig identifier and create it, "
-            "or wait here — if a peer invites you to join their group you will receive "
-            "a notification to accept.",
-        )
-
-        self._group_alias_field.clear()
-        self._group_alias_field.setReadOnly(False)
-        self._signing_threshold.setText("1")
-        self._signing_threshold.setReadOnly(False)
-        self._rotation_threshold.setText("1")
-        self._rotation_threshold.setReadOnly(False)
-        self._toad_field.setText("0")
-        self._toad_field.setReadOnly(False)
-
-        self._create_group_button.setText("Create Group Identifier")
-        self._create_group_button.setEnabled(True)
-        self._create_group_button.show()
-
-        self._s3_frozen_participants_widget.hide()
-        while self._s3_frozen_participants_layout.count():
-            item = self._s3_frozen_participants_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        self._participants_container.show()
-
-    def _reveal_section4_waiting(
-            self, group_alias: str, smids: list[str], is_proposer: bool, data: dict
-    ) -> None:
-        """Show section 4 before group inception is complete. Lock section 3."""
-        identity = self._get_identity_state()
-        state = self._get_group_state(group_alias)
-        state.is_proposer = is_proposer
-        state.section4_started = True
-        state.group_isith = data.get("isith", "1")
-        state.group_nsith = data.get("nsith", "1")
-        state.group_toad = data.get("toad", "0")
-
-        if is_proposer:
-            own_aid = identity.chosen_identifier_aid
-            if own_aid and own_aid not in state.group_signed_aids:
-                state.group_signed_aids.append(own_aid)
-
-        self._current_group_alias = group_alias
-        self._save_group_state(state)
-        self._lock_section3(state, smids, identity)
-
-        self._section4.show()
-        self._scroll_to_bottom()
-
-        self._build_signing_rows(
-            self._round1_participants_layout,
-            self._round1_participant_labels,
-            smids,
-            state.group_signed_aids,
-        )
-        self._build_signing_rows(
-            self._round2_participants_layout,
-            self._round2_participant_labels,
-            smids,
-            [],
-        )
-
-        self._sync_reset_button_placement()
+        self.closed.emit()
 
     def _launch_create_registry_doer(self, group_alias: str):
         """Launch CreateRegistryDoer for the given group alias."""
@@ -1116,158 +873,6 @@ class InitiateMultisigPage(LocksmithFormPage):
     # ------------------------------------------------------------------
     # Doer event listener
     # ------------------------------------------------------------------
-
-    def _on_doer_event(self, doer_name: str, event_type: str, data: dict):
-        # ---- GroupMultisigInceptDoer ----
-        if doer_name == "CastellanGroupMultisigInceptDoer":
-            if event_type == "group_inception_exn_sent":
-                smids = data.get("smids", [])
-                alias = data.get("alias", "")
-                if smids and alias:
-                    self._reveal_section4_waiting(alias, smids, is_proposer=True, data=data)
-
-            elif event_type == "group_participant_signed":
-                signer_aid = data.get("signer_aid", "")
-                if signer_aid:
-                    self._update_signing_row(self._round1_participant_labels, signer_aid, signed=True)
-
-            elif event_type == "group_identifier_created":
-                alias = data.get("alias", "") or self._current_group_alias
-                if not alias:
-                    return
-                state = self._get_group_state(alias)
-                state.init_step = 4
-                identity = self._get_identity_state()
-                smids = self._get_group_smids(alias)
-                for aid in smids:
-                    self._update_signing_row(self._round1_participant_labels, aid, signed=True)
-                state.group_signed_aids = list(smids)
-                own_aid = identity.chosen_identifier_aid
-                if own_aid and own_aid not in state.registry_signed_aids:
-                    state.registry_signed_aids.append(own_aid)
-                self._save_group_state(state)
-                self._update_signing_row(self._round2_participant_labels, own_aid, signed=True)
-                self._launch_create_registry_doer(alias)
-
-            elif event_type == "group_inception_failed":
-                alias = data.get("alias", "") or self._current_group_alias
-                state = self._get_group_state(alias) if alias else None
-                if state is None or not state.section4_started:
-                    self._create_group_button.setEnabled(True)
-                    self._create_group_button.setText("Create Group Identifier")
-                    self._create_group_button.show()
-                    self._sync_reset_button_placement()
-                self.show_error(f"Group creation failed: {data.get('error')}")
-
-        # ---- MultisigJoinDoer ----
-        elif doer_name == "CastellanMultisigJoinDoer":
-            if event_type == "group_join_waiting":
-                smids = data.get("smids", [])
-                alias = data.get("alias", "")
-                if smids and alias:
-                    self._reveal_section4_waiting(alias, smids, is_proposer=False, data=data)
-
-            elif event_type == "group_identifier_joined":
-                alias = data.get("alias", "") or self._current_group_alias
-                if not alias:
-                    return
-                state = self._get_group_state(alias)
-                state.init_step = 4
-                smids = self._get_group_smids(alias)
-                for aid in smids:
-                    self._update_signing_row(self._round1_participant_labels, aid, signed=True)
-                state.group_signed_aids = list(smids)
-                self._save_group_state(state)
-
-            elif event_type == "group_join_failed":
-                alias = data.get("alias", "") or self._current_group_alias
-                state = self._get_group_state(alias) if alias else None
-                if state is None or not state.section4_started:
-                    self._create_group_button.setEnabled(True)
-                    self._create_group_button.setText("Create Group Identifier")
-                    self._create_group_button.show()
-                    self._sync_reset_button_placement()
-                self.show_error(f"Group join failed: {data.get('error')}")
-
-        # ---- CreateRegistryDoer ----
-        elif doer_name == "CastellanCreateRegistryDoer":
-            alias = self._current_group_alias
-            if event_type == "registry_participant_signed":
-                signer_aid = data.get("signer_aid", "")
-                if signer_aid:
-                    self._update_signing_row(self._round2_participant_labels, signer_aid, signed=True)
-
-            elif event_type == "registry_created":
-                if alias:
-                    smids = self._get_group_smids(alias)
-                    for aid in smids:
-                        self._update_signing_row(self._round2_participant_labels, aid, signed=True)
-                    state = self._get_group_state(alias)
-                    state.registry_signed_aids = list(smids)
-                    self._save_group_state(state)
-                self._on_init_complete(data.get("regk", ""))
-
-            elif event_type == "registry_creation_failed":
-                self.show_error(f"Registry creation failed: {data.get('error')}")
-
-        # ---- RegistryAcceptDoer ----
-        elif doer_name == "CastellanRegistryAcceptDoer":
-            alias = self._current_group_alias
-            if event_type == "registry_accept_waiting":
-                own_aid = data.get("own_aid", "")
-                if own_aid and alias:
-                    state = self._get_group_state(alias)
-                    if own_aid not in state.registry_signed_aids:
-                        state.registry_signed_aids.append(own_aid)
-                        self._save_group_state(state)
-                    self._update_signing_row(self._round2_participant_labels, own_aid, signed=True)
-
-            elif event_type == "registry_accepted":
-                if alias:
-                    smids = self._get_group_smids(alias)
-                    for aid in smids:
-                        self._update_signing_row(self._round2_participant_labels, aid, signed=True)
-                    state = self._get_group_state(alias)
-                    state.registry_signed_aids = list(smids)
-                    self._save_group_state(state)
-                self._on_init_complete(data.get("regk", ""))
-
-            elif event_type == "registry_accept_failed":
-                self.show_error(f"Registry acceptance failed: {data.get('error')}")
-
-    def _on_init_complete(self, regk: str):
-        """Mark initialization as complete."""
-        self._on_init_complete_task(regk)
-
-    @qasync.asyncSlot(str)
-    async def _on_init_complete_task(self, regk: str):
-        group_alias = self._current_group_alias
-        if group_alias:
-            state = self._get_group_state(group_alias)
-            state.init_complete = True
-            self._save_group_state(state)
-
-            # Upload the newly-created group identifier to castellan before
-            # handing off, so it's already visible on the Issuers list the
-            # moment the page navigates there — otherwise the Issuers page's
-            # own load can win the race and show the list without it.
-            await self._upload_group_identifier(group_alias)
-
-        self._s4_header_lbl.setText("Initialized!")
-        self._s4_subtext_lbl.setText(
-            "Signatures have been coordinated across participants. "
-            "You are ready to issue credentials."
-        )
-
-        if self._poller is not None:
-            try:
-                self.app.vault.remove([self._poller])
-            except Exception:
-                pass
-            self._poller = None
-
-        if self.on_complete:
-            self.on_complete(regk)
 
     async def _upload_group_identifier(self, group_alias: str) -> None:
         """

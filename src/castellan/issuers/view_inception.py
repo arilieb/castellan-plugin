@@ -2,32 +2,29 @@
 """
 castellan.issuers.view module
 
-Dialog for viewing a peer-discovery identifier stored on the Castellan
-server. Deliberately proportionate — no witnesses/rotate/resubmit sections.
+Dialog for viewing a multisig AID that is being created.
+
 """
-from typing import TYPE_CHECKING
+import json
 
 import qasync
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QGridLayout
 from keri import help
-from keri.core import parsing
 from keri.core.coring import randomNonce
-from keri.core.serdering import Serdery
 from keri.help import helping
 from locksmith.ui import colors
-from locksmith.ui.styles import get_monospace_font_family
 from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithInvertedButton, LocksmithButton
-from locksmith.ui.toolkit.widgets.buttons import LocksmithCopyButton
-from locksmith.ui.toolkit.widgets.fields import LocksmithPlainTextEdit
 
 from ..core import remoting
 
 logger = help.ogler.getLogger(__name__)
 
 
-class ViewIdentifierDialog(LocksmithDialog):
+class ViewIceptionMultisigIdentifierDialog(LocksmithDialog):
     """Read-only dialog displaying an identifier uploaded to the Castellan server."""
+
+    closed = Signal()
 
     def __init__(self, app, identifier: dict, row_data: dict, parent = None):
         self.app = app
@@ -46,10 +43,7 @@ class ViewIdentifierDialog(LocksmithDialog):
         self.content_layout.setSpacing(5)
 
         # Route to appropriate builder based on type
-        if self._is_multisig():
-            self._build_multisig_content()
-        else:
-            self._build_singlesig_content()
+        self._build_multisig_content()
 
         # Add close button
         button_row = QHBoxLayout()
@@ -75,47 +69,12 @@ class ViewIdentifierDialog(LocksmithDialog):
             buttons=button_row,
         )
 
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self._finished)
+        self.setFixedSize(650, 775)
 
-        # Adjust size based on type
-        if self._is_multisig():
-            self.setFixedSize(630, 775)
-        else:
-            self.setFixedSize(630, 670)
-
-    def _is_multisig(self) -> bool:
-        """Check if identifier is a multisig by presence of 'members' attribute."""
-        return 'members' in self.identifier and isinstance(self.identifier.get('members'), list)
-
-    def _build_singlesig_content(self):
-        """Build content for single-sig identifier (existing behavior)."""
-        # Validate AID exists for single-sig
-        if not self.aid:
-            raise ValueError("Single-sig identifier dict has no usable 'aid'")
-
-        # AID field
-        self._add_aid_field()
-
-        # OOBI field (if present)
-        if self.identifier.get('oobi'):
-            self._add_oobi_field()
-
-        # Uploaded timestamp
-        self._add_timestamp_field()
-
-        self.content_layout.addSpacing(15)
-
-        # Key state frame
-        self._add_key_state_frame()
-
-        self.content_layout.addSpacing(15)
-
-        # KEL display
-        self._add_kel_display()
-
-        # Load data asynchronously
-        self._load_key_state()
-        self._load_kel()
+    def _finished(self):
+        self.closed.emit()
+        self.close()
 
     def _build_multisig_content(self):
         """Build content for multi-sig identifier."""
@@ -132,56 +91,14 @@ class ViewIdentifierDialog(LocksmithDialog):
 
         # Thresholds display
         self._add_thresholds_display()
-
-        # Members section
-        if self.state not in ("live", "live_behind"):
-            self._add_members_section()
+        self._add_members_section()
 
         self.content_layout.addSpacing(16)
 
-        # Membership status and Join button
-        if self.state in ("initiated", "rotation_initiated"):
-            self._add_membership_section()
-        elif self.state in ("initiated_ready", "rotation_initiated_ready"):
+        if self.state in ("inception_ready", "inception_signed", "inception_created"):
             self._add_complete_section()
-
-        # Key state (if active)
-        if self.state in ("live", "live_behind"):
-            self.content_layout.addSpacing(16)
-            self._add_key_state_frame()
-            self._load_key_state()
-
-    # ==================== Single-sig Helper Methods ====================
-
-    def _add_aid_field(self):
-        """Add AID field with copy button (single-sig)."""
-        row = QHBoxLayout()
-        label_widget = QLabel("AID:")
-        label_widget.setStyleSheet("font-weight: bold; font-size: 13px;")
-        row.addWidget(label_widget)
-        value_widget = QLabel(self.aid)
-        value_widget.setStyleSheet(
-            "font-family: 'Menlo', 'SF Mono', monospace; font-size: 12px; color: #636466;"
-        )
-        value_widget.setWordWrap(True)
-        row.addWidget(value_widget)
-        copy_btn = LocksmithCopyButton(copy_content=self.aid, icon_size=24)
-        row.addWidget(copy_btn)
-        row.addStretch()
-        self.content_layout.addLayout(row)
-
-    def _add_oobi_field(self):
-        """Add OOBI field (single-sig)."""
-        row = QHBoxLayout()
-        label_widget = QLabel("OOBI:")
-        label_widget.setStyleSheet("font-weight: 500; font-size: 13px;")
-        row.addWidget(label_widget)
-        value_widget = QLabel(self.identifier.get('oobi', ''))
-        value_widget.setStyleSheet("font-size: 13px;")
-        value_widget.setWordWrap(True)
-        row.addWidget(value_widget)
-        row.addStretch()
-        self.content_layout.addLayout(row)
+        else:
+            self._add_membership_section()
 
     def _add_timestamp_field(self):
         """Add uploaded timestamp field."""
@@ -199,83 +116,71 @@ class ViewIdentifierDialog(LocksmithDialog):
             row.addStretch()
             self.content_layout.addLayout(row)
 
-    def _add_key_state_frame(self):
-        """Add key state frame with local and remote sections."""
-        key_state_frame = QFrame()
-        key_state_frame.setStyleSheet(
-            "QFrame { border: 2px solid #d0d0d0; border-radius: 6px; }"
-            "QLabel { border: none; }"
-        )
-        key_state_layout = QVBoxLayout(key_state_frame)
-        key_state_layout.setContentsMargins(12, 10, 12, 10)
-        key_state_layout.setSpacing(6)
-
-        key_state_header = QLabel("Key State")
-        key_state_header.setStyleSheet("font-weight: bold; font-size: 14px; border: none;")
-        key_state_layout.addWidget(key_state_header)
-        key_state_layout.addSpacing(5)
-
-        self._local_lines = self._add_key_state_block(key_state_layout, "Local:")
-        self._remote_lines = self._add_key_state_block(key_state_layout, "Remote")
-
-        self.content_layout.addWidget(key_state_frame)
-
-    def _add_kel_display(self):
-        """Add KEL display section."""
-        kel_header = QHBoxLayout()
-        kel_label = QLabel("Key Event Log")
-        kel_label.setStyleSheet("font-weight: bold; font-size: 13px;")
-        kel_header.addWidget(kel_label)
-        kel_header.addStretch()
-        self.kel_copy_button = LocksmithCopyButton(icon_size=24)
-        kel_header.addWidget(self.kel_copy_button)
-
-        self.content_layout.addLayout(kel_header)
-
-        self._kel_field = LocksmithPlainTextEdit()
-        self._kel_field.setPlainText("Loading...")
-        self._kel_field.setReadOnly(True)
-        self._kel_field.setMinimumHeight(140)
-        self.content_layout.addWidget(self._kel_field)
-
     # ==================== Multi-sig Helper Methods ====================
 
     def _add_state_badge(self):
         """Add visual badge showing multisig state."""
-        badge = QLabel(self.row_data.get("Status"))
-        if self.state == 'created':
-            badge.setStyleSheet("""
-                QLabel {
-                    background: #fef3c7;
-                    color: #92400e;
-                    padding: 4px 12px;
-                    border-radius: 12px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }
-            """)
-        elif self.state in ('proposal_signed', 'proposal_not_signed'):
-            badge.setStyleSheet("""
-                QLabel {
-                    background: #dbeafe;
-                    color: #1e40af;
-                    padding: 4px 12px;
-                    border-radius: 12px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }
-            """)
-        else:  # active
-            badge.setStyleSheet("""
-                QLabel {
-                    background: #d1fae5;
-                    color: #065f46;
-                    padding: 4px 12px;
-                    border-radius: 12px;
-                    font-size: 11px;
-                    font-weight: 600;
-                }
-            """)
+        match self.state:
+            case "inception":
+                badge = QLabel("Pending your approval")
+                badge.setStyleSheet("""
+                    QLabel {
+                        background: #fef3c7;
+                        color: #92400e;
+                        padding: 4px 12px;
+                        border-radius: 12px;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
+                """)
+            case "inception_joined":
+                badge = QLabel("Pending other approvals")
+                badge.setStyleSheet("""
+                    QLabel {
+                        background: #fef3c7;
+                        color: #92400e;
+                        padding: 4px 12px;
+                        border-radius: 12px;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
+                """)
+            case "inception_created" | "inception_ready":
+                badge = QLabel("Pending your signature")
+                badge.setStyleSheet("""
+                    QLabel {
+                        background: #fef3c7;
+                        color: #92400e;
+                        padding: 4px 12px;
+                        border-radius: 12px;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
+                """)  # YELLOW BACKGROUND, RED TEXT
+            case "inception_signed":
+                badge = QLabel("Pending other signatures")
+                badge.setStyleSheet("""
+                    QLabel {
+                        background: #d1fae5;
+                        color: #065f46;
+                        padding: 2px 8px;
+                        border-radius: 8px;
+                        font-size: 10px;
+                        font-weight: 600;
+                    }
+                """)  # BLUE
+            case _:
+                badge = QLabel("Unknown")
+                badge.setStyleSheet("""
+                    QLabel {
+                        background: #dbeafe;
+                        color: #1e40af;
+                        padding: 4px 12px;
+                        border-radius: 12px;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
+                """)
 
         badge_layout = QHBoxLayout()
         badge_layout.addWidget(badge)
@@ -285,8 +190,6 @@ class ViewIdentifierDialog(LocksmithDialog):
 
     def _add_multisig_aid_field(self):
         """Add AID field for multisig (show 'Pending' if null)."""
-        aid = self.identifier.get('aid')
-
         field_layout = QHBoxLayout()
         field_layout.setSpacing(8)
 
@@ -294,23 +197,9 @@ class ViewIdentifierDialog(LocksmithDialog):
         label.setStyleSheet(f"font-weight: 600; color: {colors.TEXT_MENU};")
         field_layout.addWidget(label)
 
-        if aid is None:
-            value_label = QLabel("Pending")
-            value_label.setStyleSheet(f"color: {colors.TEXT_SUBTLE}; font-style: italic;")
-            field_layout.addWidget(value_label)
-        else:
-            value_label = QLabel(aid)
-            value_label.setStyleSheet(
-                f"color: {colors.TEXT_SUBTLE}; "
-                f"font-family: {get_monospace_font_family()}; "
-                f"font-size: 11px;"
-            )
-            field_layout.addWidget(value_label, stretch=1)
-
-            # Copy button
-            copy_btn = LocksmithCopyButton()
-            copy_btn.set_copy_content(aid)
-            field_layout.addWidget(copy_btn)
+        value_label = QLabel("Pending")
+        value_label.setStyleSheet(f"color: {colors.TEXT_SUBTLE}; font-style: italic;")
+        field_layout.addWidget(value_label)
 
         field_layout.addStretch()
         self.content_layout.addLayout(field_layout)
@@ -435,40 +324,27 @@ class ViewIdentifierDialog(LocksmithDialog):
         row_layout.addWidget(name_label, stretch=3)
 
         # Status badge - use "Approved" terminology for pending/ready states
-        has_joined = member.get('member_aid', False)
-        has_signed = member.get('public_key', False)
-
-        if self.state in ('initiated', 'rotation_initiated', 'initiated_joined', 'rotation_initiated_joined'):
-            status_label = QLabel("Approved" if has_joined else "Not Approved")
+        if self.identifier.get("aid", None) is None:
+            label_flag = member.get("member_aid", None)
+            status_label = QLabel("Approved" if label_flag else "Not Approved")
         else:
-            status_label = QLabel("Signed" if has_signed else "Not Signed")
+            label_flag = member.get('public_key', None)
+            status_label = QLabel("Signed" if label_flag else "Not Signed")
 
         status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        if has_joined:
+        if label_flag:
             # Yellow for approved in pending/ready states, green for joined in active state
-            if self.state in ('pending', 'ready'):
-                status_label.setStyleSheet("""
-                    QLabel {
-                        background: #fef3c7;
-                        color: #92400e;
-                        padding: 2px 8px;
-                        border-radius: 8px;
-                        font-size: 10px;
-                        font-weight: 600;
-                    }
-                """)
-            else:
-                status_label.setStyleSheet("""
-                    QLabel {
-                        background: #d1fae5;
-                        color: #065f46;
-                        padding: 2px 8px;
-                        border-radius: 8px;
-                        font-size: 10px;
-                        font-weight: 600;
-                    }
-                """)
+            status_label.setStyleSheet("""
+                QLabel {
+                    background: #d1fae5;
+                    color: #065f46;
+                    padding: 2px 8px;
+                    border-radius: 8px;
+                    font-size: 10px;
+                    font-weight: 600;
+                }
+            """)
         else:
             status_label.setStyleSheet("""
                 QLabel {
@@ -499,10 +375,7 @@ class ViewIdentifierDialog(LocksmithDialog):
 
         if self._has_joined():
             # Already joined/approved - show success message with appropriate terminology
-            if state in ('pending', 'ready'):
-                success = QLabel("✓ You have approved this multisig.")
-            else:
-                success = QLabel("✓ You have joined this multisig.")
+            success = QLabel("✓ You have approved this multisig.")
             success.setStyleSheet(f"font-size: 13px; color: #065f46; font-weight: 600;")
             self.content_layout.addWidget(success)
             return
@@ -511,11 +384,11 @@ class ViewIdentifierDialog(LocksmithDialog):
         self.content_layout.addSpacing(4)
 
         button_text = None
-        if state in ("initiated", "rotation_initiated"):
+        if state in ("inception",):
             info = QLabel("You have been requested as a member of this multisig event. Click Approve to participate.")
             button_text = "Approve Multisig"
         else:
-            info = QLabel("You are waiting on others.")
+            info = QLabel("You are waiting on others to approve this multisig.")
 
 
         info.setStyleSheet(f"font-size: 13px; color: {colors.TEXT_MENU};")
@@ -535,7 +408,15 @@ class ViewIdentifierDialog(LocksmithDialog):
     def _add_complete_section(self):
         """Add Complete button and instructions when all members have joined."""
         # Instruction text
-        info = QLabel("The AID is ready to complete. Click the button below to create and sign the inception event and share with other members.")
+        # Already joined/approved - show success message with appropriate terminology
+        if self.state == "inception_signed":
+            success = QLabel("✓ You have signed this multisig.")
+            success.setStyleSheet(f"font-size: 13px; color: #065f46; font-weight: 600;")
+            self.content_layout.addWidget(success)
+            return
+
+        info = QLabel("The AID is ready to complete. Click the button below to create and sign the"
+                      " inception event and share with other members.")
         info.setStyleSheet(f"font-size: 13px; color: {colors.TEXT_MENU}; line-height: 1.5;")
         info.setWordWrap(True)
         self.content_layout.addWidget(info)
@@ -557,7 +438,7 @@ class ViewIdentifierDialog(LocksmithDialog):
         self.complete_btn.setEnabled(False)
         self.complete_btn.setText("Joining...")
 
-        await self._load_multisig_member_kels()
+        await remoting.load_multisig_member_kels(self.app, self.identifier)
         ghab = await self._complete_multisig_inception()
         await self._publish_multisig_inception(ghab)
 
@@ -628,6 +509,8 @@ class ViewIdentifierDialog(LocksmithDialog):
 
         # Update the identifier with the new data from the server
         self.identifier.update(result)
+        self.state = remoting.get_multisig_state(self.app, self.identifier)
+        self.identifier["_state"] = self.state
 
         # Refresh the UI to show updated state
         await self._refresh_membership_section()
@@ -655,170 +538,6 @@ class ViewIdentifierDialog(LocksmithDialog):
                 self._clear_layout(item.layout())
 
     # ==================== Static Helper Methods ====================
-
-    @staticmethod
-    def _add_field_row(layout: QVBoxLayout, label: str, value: str):
-        row = QHBoxLayout()
-        label_widget = QLabel(label)
-        label_widget.setStyleSheet("font-weight: 500; font-size: 13px;")
-        row.addWidget(label_widget)
-        value_widget = QLabel(value)
-        value_widget.setStyleSheet("font-size: 13px;")
-        value_widget.setWordWrap(True)
-        row.addWidget(value_widget)
-        row.addStretch()
-        layout.addLayout(row)
-
-    @staticmethod
-    def _add_aid_row(layout: QVBoxLayout, aid: str):
-        row = QHBoxLayout()
-        label_widget = QLabel("AID:")
-        label_widget.setStyleSheet("font-weight: bold; font-size: 13px;")
-        row.addWidget(label_widget)
-        value_widget = QLabel(aid)
-        value_widget.setStyleSheet(
-            "font-family: 'Menlo', 'SF Mono', monospace; font-size: 12px; color: #636466;"
-        )
-        value_widget.setWordWrap(True)
-        row.addWidget(value_widget)
-        copy_btn = LocksmithCopyButton(copy_content=aid, icon_size=24)
-        row.addWidget(copy_btn)
-        row.addStretch()
-        layout.addLayout(row)
-
-    @staticmethod
-    def _add_key_state_block(layout: QVBoxLayout, header: str) -> QGridLayout:
-        """Add a key-state block: a bold header label plus an indented grid.
-
-        Returns the inner (indented) QGridLayout so detail rows can be added later.
-        """
-        header_lbl = QLabel(header)
-        header_lbl.setStyleSheet("font-weight: bold; font-size: 13px; border: none;")
-        layout.addWidget(header_lbl)
-
-        indented_row = QHBoxLayout()
-        indented_row.addSpacing(20)
-        detail_layout = QGridLayout()
-        detail_layout.setVerticalSpacing(2)
-        detail_layout.setHorizontalSpacing(6)
-        detail_layout.setContentsMargins(0, 0, 0, 0)
-        indented_row.addLayout(detail_layout)
-        indented_row.addStretch()
-        layout.addLayout(indented_row)
-        return detail_layout
-
-    @staticmethod
-    def _set_key_state_details(detail_layout: QGridLayout, fields: "list[tuple[str, str]] | str"):
-        """Replace the contents of a detail layout with the given rows.
-
-        ``fields`` is either a list of (name, value) pairs or a single string note.
-        Rows are laid out in a grid so the ``=`` signs align vertically.
-        """
-        while detail_layout.count():
-            item = detail_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        if isinstance(fields, str):
-            note = QLabel(fields)
-            note.setStyleSheet("font-size: 13px; border: none;")
-            detail_layout.addWidget(note, 0, 0, 1, 3)
-            return
-
-        for i, (name, value) in enumerate(fields):
-            name_lbl = QLabel(name)
-            name_lbl.setStyleSheet("font-size: 13px; border: none; font-weight: 500;")
-            eq_lbl = QLabel(":")
-            eq_lbl.setStyleSheet("font-size: 13px; border: none; font-weight: bold;")
-            value_lbl = QLabel(value)
-            value_lbl.setStyleSheet("font-family: 'Menlo', 'SF Mono', monospace; font-size: 12px; color: #636466; border: none;")
-            detail_layout.addWidget(name_lbl, i, 0)
-            detail_layout.addWidget(eq_lbl, i, 1)
-            detail_layout.addWidget(value_lbl, i, 2)
-
-    @qasync.asyncSlot()
-    async def _load_key_state(self):
-        # Skip if aid is None (pending multisig)
-        if not self.aid:
-            return
-
-        # Check if identifier has key_state and current_event from server
-        stored_key_state = self.identifier.get('key_state')
-        current_event = self.identifier.get('current_event')
-
-        # Determine if we should show key state or current event
-        if stored_key_state and current_event:
-            # Compare sequence numbers
-            key_state_sn = stored_key_state.get('sn', 0)
-            current_event_sn = int(current_event.get('s', '0'), 16)
-
-            if current_event_sn > key_state_sn:
-                # Current event is ahead - show current event section instead
-                self._show_current_event_section(current_event)
-                return
-            # Otherwise fall through to show key state normally
-
-        # Show local key state
-        hab = self.app.vault.hby.habs.get(self.aid) if self.app.vault else None
-        if hab is not None:
-            local_state = hab.kever.state()  # type: ignore
-            self._set_key_state_details(self._local_lines, [
-                ("Sequence Number", str(int(local_state.s, 16))),
-                ("Event Digest", local_state.d),
-            ])
-        else:
-            self._set_key_state_details(self._local_lines, "not controlled by this vault")
-
-        # Show remote key state - use stored key_state if available and matches
-        if stored_key_state and current_event:
-            key_state_sn = stored_key_state.get('sn', 0)
-            current_event_sn = int(current_event.get('s', '0'), 16)
-
-            if current_event_sn == key_state_sn:
-                # Use stored key state from identifier
-                self._set_key_state_details(self._remote_lines, [
-                    ("Sequence Number", str(key_state_sn)),
-                    ("Event Digest", stored_key_state.get('d', '')),
-                ])
-                return
-
-        # Otherwise fetch from server
-        try:
-            result = await remoting.fetch_identifier_keystate(app=self.app, identifier_prefix=self.aid)
-            if result.get('success') and result.get('data') is not None:
-                key_state = result['data'].get('key_state', {})
-                sn = int(key_state.get('s', '0'), 16)
-                said = key_state.get('d', '')
-                self._set_key_state_details(self._remote_lines, [
-                    ("Sequence Number", str(sn)),
-                    ("Event Digest", said),
-                ])
-            else:
-                self._set_key_state_details(self._remote_lines, "not found")
-        except Exception as e:
-            logger.exception(f"Error fetching remote key state for {self.aid}: {e}")
-            self._set_key_state_details(self._remote_lines, "error fetching key state")
-
-    def _show_current_event_section(self, current_event: dict):
-        """Replace key state frame with current event frame when event is ahead of key state."""
-        # Find and remove the existing key state frame
-        for i in range(self.content_layout.count()):
-            item = self.content_layout.itemAt(i)
-            if item and item.widget() and isinstance(item.widget(), QFrame):
-                widget = item.widget()
-                # Check if this is the key state frame by checking its first label
-                layout = widget.layout()
-                if layout and layout.count() > 0:
-                    first_item = layout.itemAt(0)
-                    if first_item and first_item.widget() and isinstance(first_item.widget(), QLabel):
-                        label = first_item.widget()
-                        if label.text() == "Key State":
-                            # Remove this frame and add current event frame
-                            self.content_layout.removeWidget(widget)
-                            widget.deleteLater()
-                            self._add_current_event_frame(current_event, i)
-                            return
 
     def _add_current_event_frame(self, current_event: dict, position: int = -1):
         """Add current event frame showing event ahead of key state."""
@@ -886,70 +605,6 @@ class ViewIdentifierDialog(LocksmithDialog):
             self.content_layout.insertWidget(position, event_frame)
         else:
             self.content_layout.addWidget(event_frame)
-
-    @qasync.asyncSlot()
-    async def _load_kel(self):
-        # Skip if aid is None (pending multisig)
-        if not self.aid:
-            return
-
-        try:
-            result = await remoting.fetch_identifier_kel(self.app, self.aid)
-            if result.get('success'):
-                kel_bytes = result.get('kel_bytes', b"")
-                kel_text = self._format_kel(kel_bytes) if kel_bytes else "No KEL captured yet."
-                self._kel_field.setPlainText(kel_text)
-                if kel_bytes:
-                    self.kel_copy_button.copy_content = kel_text  # type: ignore
-            else:
-                self._kel_field.setPlainText(f"Error loading KEL: {result.get('error', 'Unknown error')}")
-        except Exception as e:
-            logger.exception(f"Error fetching KEL for {self.aid}: {e}")
-            self._kel_field.setPlainText(f"Error loading KEL: {e}")
-
-    @staticmethod
-    def _format_kel(kel_bytes: bytes) -> str:
-        """ Pretty-print each event in a CESR stream of concatenated events. """
-        blocks = []
-        serdery = Serdery()
-        ims = bytearray(kel_bytes)
-        while ims:
-            serder = serdery.reap(ims)  # strips this event's raw off the front
-
-            # What remains starts with this event's attachment, running until
-            # the next event's JSON ('{') or the end of the stream.
-            next_event = ims.find(b"{")
-            attach_end = next_event if next_event != -1 else len(ims)
-            attachment = ims[:attach_end]
-            del ims[:attach_end]
-
-            blocks.append(f"{serder.pretty()}\n{attachment.decode('utf-8', errors='replace')}")
-
-        return "\n\n".join(blocks)
-
-    async def _load_multisig_member_kels(self):
-        """ Loop through all members of a multisig identifier and load the KELs of members who are not us."""
-
-        for member in self.identifier.get("members", []):
-            member_aid = member.get("member_aid")
-
-            if not member_aid:
-                raise ValueError("Member does not have a member_aid, multisig not ready to be completed")
-
-            # Don't need to process our own KEL
-            if member_aid in self.app.vault.hby.habs:
-                continue
-
-            result = await remoting.fetch_identifier_kel(self.app, member_aid)
-            if not result.get("success"):
-                raise ValueError(f"Error fetching KEL for {member_aid}: {result.get('error')}")
-
-            ims = bytearray(result.get("kel_bytes"))
-            parsing.Parser(kvy=self.app.vault.kvy, rvy=self.app.vault.hby.rvy, local=False).parse(ims)
-            self.app.vault.kvy.processEscrows()
-
-            if member_aid not in self.app.vault.kvy.kevers:
-                raise ValueError(f"Member {member_aid} KEL would not parse.")
 
     async def _complete_multisig_inception(self):
         """ Create the GroupHab from the members of the multisig identifier. """
@@ -1042,9 +697,8 @@ class ViewIdentifierDialog(LocksmithDialog):
 
         # Update the identifier with the new data from the server
         self.identifier.update(result)
+        self.state = remoting.get_multisig_state(self.app, self.identifier)
+        self.identifier["_state"] = self.state
 
         # Refresh the UI to show updated state
         await self._refresh_membership_section()
-
-
-

@@ -155,7 +155,8 @@ class IssuedCredentialsListPage(QWidget):
             logger.debug(f"Could not determine local TEL state for {said}: {e}")
             return None
 
-    def _get_row_actions(self, row_data: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    @staticmethod
+    def _get_row_actions(row_data: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
         all_icons = {
             "View": ":/assets/material-icons/view.svg",
             "Edit": ":/assets/material-icons/edit.svg",

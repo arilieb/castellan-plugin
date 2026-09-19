@@ -10,9 +10,6 @@ from locksmith.ui.toolkit.widgets import LocksmithDialog, LocksmithButton, Locks
 
 from ...core import remoting
 
-if TYPE_CHECKING:
-    from locksmith.ui.vault.page import VaultPage
-
 logger = help.ogler.getLogger(__name__)
 
 
@@ -36,7 +33,7 @@ class ServerUpdateDialog(LocksmithDialog):
         local_sn: int,
         remote_sn: int,
         revoked_credential: dict | None = None,
-        parent: "VaultPage | None" = None,
+        parent = None,
     ):
         """Initialize the server update dialog.
 

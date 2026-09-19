@@ -92,8 +92,6 @@ class UploadSchemaDialog(LocksmithDialog):
 
         try:
             existing_saids = await remoting.fetch_all_castellan_schema_saids(self.app)
-            print(f"EXSITING SAIDS {existing_saids}")
-
 
             items = []
             for (schema_said,), schemer in self.app.vault.hby.db.schema.getItemIter():

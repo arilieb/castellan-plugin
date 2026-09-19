@@ -17,9 +17,14 @@ from locksmith.ui.toolkit.tables import PaginatedTableWidget
 
 from .upload import UploadIdentifierDialog
 from .view import ViewIdentifierDialog
+from .view_inception import ViewIceptionMultisigIdentifierDialog
+from .view_live import ViewLiveMultisigIdentifierDialog
+from .view_single import ViewSingleIdentifierDialog
+from .create_registry import CreateRegistryDialog
+from .view_registry import ViewRegistryCreationDialog
+from ..core import remoting
 from ..credentials.issued.list import _exec_dialog_async
 from ..credentials.issued.server_update import ServerUpdateDialog
-from ..core import remoting
 
 if TYPE_CHECKING:
     from locksmith.ui.vault.page import VaultPage
@@ -55,8 +60,8 @@ class IdentifiersListPage(QWidget):
         self.setAutoFillBackground(True)
 
         self.table = PaginatedTableWidget(
-            columns=["Alias", "AID", "Seq No", "Uploaded"],
-            column_widths={"Alias": 170, "Uploaded": 165, "Actions": 50, "Seq No": 100},
+            columns=["Alias", "AID", "Status", "Seq No"],
+            column_widths={"Alias": 140, "Status": 165, "Actions": 50, "Seq No": 100},
             title="Issuers",
             icon_path=":/assets/material-icons/group.svg",
             show_add_button=True,
@@ -65,12 +70,13 @@ class IdentifiersListPage(QWidget):
             row_action_icons={
                 "View": ":/assets/material-icons/view.svg",
                 "Update": ":/assets/material-icons/cloud_sync.svg",
+                "Create Registry": ":/assets/material-icons/shield_lock.svg",
                 "Delete": ":/assets/material-icons/delete.svg",
             },
             row_actions_callback=self._get_row_actions,
             items_per_page=10,
             show_search=True,
-            column_sort_mapping={"Alias": "alias", "AID": "aid", "Uploaded": "created_at"},
+            column_sort_mapping={"Alias": "alias", "AID": "aid", "Status": "_state"},
             transform_func=self._transform_identifier_to_row,
             parent=self,
         )
@@ -83,17 +89,70 @@ class IdentifiersListPage(QWidget):
         layout.addWidget(self.table)
 
     def _transform_identifier_to_row(self, identifier: dict[str, Any]) -> dict[str, Any]:
+        state = remoting.get_multisig_state(self.app, identifier)
+        identifier["_state"] = state
         aid = identifier.get('aid', '')
         alias = identifier.get('alias', '')
         created_at = helping.fromIso8601(identifier.get('created_at', '')).strftime("%b %d, %Y %I:%M %p")
 
         hab = self.app.vault.hby.habs.get(aid)
         is_local = hab is not None
+        has_local_hab = hab is not None
 
         seq_display = "—"
+        match state:
+            case "inception":
+                state_display = "Initiated"
+                state_color = colors.DANGER
+            case "inception_joined":
+                state_display = "Initiated/Joined"
+                state_color = colors.WARNING_YELLOW
+            case "inception_ready":
+                state_display = "Ready to Sign"
+                state_color = colors.SUCCESS_INDICATOR
+            case "inception_created":
+                state_display = "Pending Signature"
+                state_color = colors.DANGER
+            case "inception_signed":
+                state_display = "Waiting for others"
+                state_color = colors.WARNING_YELLOW
+            case "rotation":
+                state_display = "Rotation Initiated"
+                state_color = colors.DANGER
+            case "rotation_joined":
+                state_display = "Rotation Initiated/Joined"
+                state_color = colors.WARNING_YELLOW
+            case "rotation_ready":
+                state_display = "Ready to Sign"
+                state_color = colors.SUCCESS_INDICATOR
+            case "rotation_created":
+                state_display = "Rotation, pending signature"
+                state_color = colors.DANGER
+            case "rotation_signed":
+                state_display = "Rotation, waiting for others"
+                state_color = colors.WARNING_YELLOW
+            case "registry_created":
+                state_display = "Registry, pending signature"
+                state_color = colors.DANGER
+            case "registry_signed":
+                state_display = "Registry, waiting for others"
+                state_color = colors.WARNING_YELLOW
+            case "live_behind":
+                state_display = "Remote Ahead"
+                state_color = colors.WARNING_YELLOW
+                pass
+            case "live":
+                state_display = "Live"
+                state_color = colors.SUCCESS_INDICATOR
+                pass
+            case _:
+                state_display = "Unknown"
+                state_color = colors.DANGER
+
+
         is_out_of_sync = False
         local_sn = remote_sn = None
-        if is_local:
+        if is_local and hab.kever:
             local_sn = int(hab.kever.state().s, 16)
             key_state = identifier.get('key_state')
             if key_state:
@@ -103,10 +162,14 @@ class IdentifiersListPage(QWidget):
 
         row_data = {
             'Alias': alias,
+            'Status': state_display,
+            'Status_color': state_color,
             'AID': aid,
             'Seq No': seq_display,
             'Uploaded': created_at,
             '_aid': aid,
+            '_state': state,
+            '_has_local_hab': has_local_hab,
             '_is_local': is_local,
             '_out_of_sync': is_out_of_sync,
         }
@@ -123,17 +186,25 @@ class IdentifiersListPage(QWidget):
         self._identifiers_cache[aid] = identifier
         return row_data
 
-    def _get_row_actions(self, row_data: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
+    @staticmethod
+    def _get_row_actions(row_data: dict[str, Any]) -> tuple[list[str], dict[str, str]]:
         all_icons = {
             "View": ":/assets/material-icons/view.svg",
             "Update": ":/assets/material-icons/cloud_sync.svg",
             "Delete": ":/assets/material-icons/delete.svg",
+            "Create Registry": ":/assets/material-icons/shield_lock.svg",
         }
-        actions = ["View"]
+        actions = ["View", "Delete"]
+
+        # Add Create Registry for live identifiers that we control
+        state = row_data.get('_state')
+        has_local_hab = row_data.get('_has_local_hab', False)
+        if state in ('live', 'live_behind') and has_local_hab:
+            actions.insert(1, "Create Registry")  # Insert after View
+
         if row_data.get('_is_local'):
             if row_data.get('_out_of_sync'):
                 actions.append("Update")
-            actions.append("Delete")
         return actions, {a: all_icons[a] for a in actions}
 
     @qasync.asyncSlot(dict)
@@ -187,19 +258,53 @@ class IdentifiersListPage(QWidget):
 
     def _on_row_action(self, row_data: dict[str, Any], action: str):
         if action == "View":
-            self._view_identifier(row_data.get('_aid', ''))
+            self._view_identifier(row_data)
+        elif action == "Create Registry":
+            self._on_create_registry(row_data)
         elif action == "Update":
             self._on_update_identifier(row_data)
         elif action == "Delete":
             self._on_delete_identifier(row_data)
 
-    def _view_identifier(self, aid: str):
+    def _view_identifier(self, row_data: dict):
+        aid = row_data.get('_aid', '')
         identifier = self._identifiers_cache.get(aid)
         if not identifier:
             logger.error(f"Identifier {aid} not in cache")
             return
-        dialog = ViewIdentifierDialog(app=self.app, identifier=identifier, parent=self)
+        state = identifier.get("_state")
+        match state:
+            case "single":
+                dialog = ViewSingleIdentifierDialog(app=self.app, identifier=identifier, parent=self)
+            case "inception" | "inception_joined" | "inception_ready" | "inception_created" | "inception_signed":
+                dialog = ViewIceptionMultisigIdentifierDialog(app=self.app, identifier=identifier, row_data=row_data, parent=self)
+                dialog.closed.connect(self.on_show)
+            case "registry_created" | "registry_signed":
+                dialog = ViewRegistryCreationDialog(app=self.app, identifier=identifier, row_data=row_data, parent=self)
+                dialog.closed.connect(self.on_show)
+            case "live" | "live_behind":
+                dialog = ViewLiveMultisigIdentifierDialog(app=self.app, identifier=identifier, row_data=row_data, parent=self)
+                dialog.closed.connect(self.on_show)
+            case _:
+                dialog = ViewIdentifierDialog(app=self.app, identifier=identifier, row_data=row_data, parent=self)
+
         dialog.show()
+
+    def _on_create_registry(self, row_data: dict[str, Any]):
+        """Launch Create Registry dialog for the selected identifier."""
+        aid = row_data.get('_aid', '')
+        identifier = self._identifiers_cache.get(aid)
+        if not identifier:
+            logger.error(f"Identifier {aid} not in cache")
+            return
+
+        dialog = CreateRegistryDialog(
+            app=self.app,
+            identifier=identifier,
+            on_refresh=self._refresh_table,
+            parent=self,
+        )
+        dialog.exec()
 
     @qasync.asyncSlot(dict)
     async def _on_update_identifier(self, row_data: dict[str, Any]):

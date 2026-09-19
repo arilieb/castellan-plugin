@@ -372,6 +372,10 @@ class CastellanAdminSetupPage(LocksmithFormPage):
             self.app.vault.plugin_state["castellan"]["essr"] = essr
             self.settings = settings
 
+            response = await remoting.get_account(self.app, settings.issuer_aid)
+            if response["success"]:
+                self.app.vault.plugin_state["castellan"]["account"] = response["account"]
+
             logger.info("Castellan admin setup complete")
             self.setup_complete_clicked.emit()
 

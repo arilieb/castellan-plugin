@@ -59,6 +59,7 @@ class MultisigInitState:
     group_isith: str = "1"           # signing threshold — persisted for joiner display
     group_nsith: str = "1"           # rotation threshold
     group_toad: str = "0"            # TOAD
+    threshold_config: dict = field(default_factory=dict)  # {aid: {'signing': str, 'rotation': str}}
 
 
 class CastellanBaser(dbing.LMDBer):

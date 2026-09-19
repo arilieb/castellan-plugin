@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import qasync
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from keri import help
 from keri.app.habbing import GroupHab
 
@@ -26,7 +26,6 @@ from ..core import remoting
 
 if TYPE_CHECKING:
     from locksmith.core.apping import LocksmithApplication
-    from locksmith.ui.vault.page import VaultPage
 
 logger = help.ogler.getLogger(__name__)
 
@@ -40,7 +39,7 @@ class UploadIdentifierDialog(LocksmithDialog):
         existing_identifiers: list[str],
         on_refresh: Callable[[], None] | None = None,
         on_navigate_to_multisig_init: Callable[[], None] | None = None,
-        parent: "VaultPage | None" = None,
+        parent = None,
     ):
         self.app = app
         self.existing_identifiers = existing_identifiers
@@ -54,9 +53,25 @@ class UploadIdentifierDialog(LocksmithDialog):
         content_layout.setContentsMargins(0, 10, 0, 0)
         content_layout.setSpacing(12)
 
+        desc = QLabel(
+            "Select a local identifier to upload to Castellan as an Issuer."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"font-size: 15px; color: {colors.TEXT_SUBTLE};")
+        content_layout.addWidget(desc)
+        content_layout.addSpacing(10)
+
         self.identifier_selector = FloatingLabelComboBox(label_text="Select Issuer")
         self.identifier_selector.setFixedWidth(420)
         content_layout.addWidget(self.identifier_selector)
+
+        desc = QLabel(
+            "or..."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"font-size: 15px; color: {colors.TEXT_SUBTLE};")
+        content_layout.addWidget(desc)
+        content_layout.addSpacing(8)
 
         self.multisig_link = QPushButton("Create a Castellan Multi-signature Issuer")
         self.multisig_link.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -96,7 +111,7 @@ class UploadIdentifierDialog(LocksmithDialog):
             buttons=button_row,
         )
 
-        self.setFixedSize(480, 270)
+        self.setFixedSize(480, 375)
 
         self.cancel_btn.clicked.connect(self.close)
         self.upload_btn.clicked.connect(self._on_upload)
@@ -111,12 +126,27 @@ class UploadIdentifierDialog(LocksmithDialog):
         self.identifier_selector.clear()
         self._aid_by_display.clear()
 
-        hby = self.app.vault.hby
-        for aid, hab in hby.habs.items():
+        account = self.app.vault.plugin_state.get("healthkeri", {}).get("account", None)
+        settings = self.app.vault.plugin_state.get("castellan", {}).get("settings", {})
+
+        for (ns, alias), prefix in self.app.vault.hby.db.names.getItemIter(keys=()):
+            if ns != "":
+                continue
+
+            hab = self.app.vault.hby.habByName(alias)
+            aid = hab.pre
+
             if isinstance(hab, GroupHab):
                 continue
             if aid in self.existing_identifiers:
                 continue
+
+            if account and account.aid == aid:
+                continue
+
+            if settings and settings.issuer_aid == aid:
+                continue
+
             display = f"{hab.name} - {aid}"
             self._aid_by_display[display] = aid
             self.identifier_selector.addItem(display)
