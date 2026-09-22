@@ -5,6 +5,7 @@ castellan.credentials.issued.list module
 Issued credentials list page — shows issued credentials stored on the Castellan server.
 """
 import asyncio
+import json
 from typing import Any, TYPE_CHECKING
 
 import qasync
@@ -384,6 +385,7 @@ class IssuedCredentialsListPage(QWidget):
             if local_status != "Revoked" or remote_status == "Revoked":
                 continue
 
+            print(f"Found credential {said} with local status {local_status} and remote status {remote_status}")
             issuer_pre = credential.get('issuer', '')
             hab = self.app.vault.hby.habs.get(issuer_pre)
             if not hab:
@@ -454,7 +456,7 @@ class IssuedCredentialsListPage(QWidget):
 
                 remote_data = result.get('data', {})
                 if remote_data is None:
-                    remote_sn = -1
+                    continue
                 else:
                     remote_sn = int(remote_data.get('key_state', {}).get('s', 0), 16)
 

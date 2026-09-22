@@ -28,7 +28,7 @@ Differences from the whisper original:
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import qasync
 from PySide6.QtCore import QTimer, Qt, Signal
@@ -37,7 +37,6 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton,
 )
 from keri.core.coring import randomNonce
-from locksmith.core import habbing
 from locksmith.ui import colors
 from locksmith.ui.styles import get_monospace_font_family
 from locksmith.ui.toolkit.widgets.buttons import (
@@ -51,10 +50,6 @@ from .doers import CreateRegistryDoer
 from ...core import remoting
 from ...db.basing import MultisigIdentityState, MultisigInitState
 from ...setup import SegmentedToggle
-
-if TYPE_CHECKING:
-    from locksmith.core.apping import LocksmithApplication
-    from locksmith.ui.vault.page import VaultPage
 
 from keri import help
 
@@ -98,9 +93,9 @@ class InitiateMultisigPage(LocksmithFormPage):
 
     def __init__(
         self,
-        app: "LocksmithApplication",
+        app,
         on_complete: Callable[[str], None] | None = None,
-        parent: "VaultPage | None" = None,
+        parent = None,
     ):
         header_content = _build_header(
             "Create a Castellan Multisig", ":/assets/custom/logos/castellan-lightmode.png"
@@ -857,6 +852,8 @@ class InitiateMultisigPage(LocksmithFormPage):
 
         self._reset_button.setText("Cancel")
         self._reset_button.setEnabled(True)
+        self._continue_btn.setEnabled(True)
+
         self.closed.emit()
 
     def _launch_create_registry_doer(self, group_alias: str):

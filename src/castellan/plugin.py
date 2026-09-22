@@ -7,8 +7,6 @@ Registers castellan page(s), menus, and lifecycle hooks.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import qasync
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QWidget
@@ -21,12 +19,10 @@ from locksmith.plugins.base import (
 from locksmith.ui.toolkit.widgets.buttons import BackButton
 from locksmith.ui.vault.menu import MenuButton
 
+from .core.synchronizing import SynchronizationUI
+from .issuers.multisig.add_witnesses import ConfigureIssuerMultisigIdentifier
 from .core import remoting
 from .db.basing import CastellanBaser
-
-if TYPE_CHECKING:
-    from locksmith.core.apping import LocksmithApplication
-    from locksmith.core.vaulting import Vault
 
 logger = help.ogler.getLogger(__name__)
 
@@ -42,6 +38,8 @@ class CastellanPlugin(
         self._db = None
         self.parent = None
         self._app = None
+        self._open_group_dialog_gid: str | None = None
+        self._open_registry_dialog_gid: str | None = None
 
     @property
     def plugin_id(self) -> str:
@@ -53,17 +51,15 @@ class CastellanPlugin(
             "credentials, and TEL events through a server or service provider."
         )
 
-    def initialize(self, app: "LocksmithApplication", parent) -> None:
+    def initialize(self, app, parent) -> None:
         self._app = app
         self.parent = parent
         self._db: CastellanBaser | None = None
         self._pages: dict[str, QWidget] = {}
-        self._open_group_dialog_gid: str | None = None
-        self._open_registry_dialog_gid: str | None = None
         self._build_pages(app)
         self._build_menu()
 
-    def _build_pages(self, app: "LocksmithApplication") -> None:
+    def _build_pages(self, app) -> None:
         """Instantiate all castellan page widgets."""
         from .schema.list import SchemaListPage
         from .credentials.issued.list import IssuedCredentialsListPage
@@ -73,24 +69,49 @@ class CastellanPlugin(
         from .issuers.multisig.initiate import InitiateMultisigPage
         from .setup import CastellanAdminSetupPage
 
+        issuer_list_page = IdentifiersListPage(
+            app, on_navigate_to_multisig_init=self._navigate_to_multisig_init, parent=None
+        )
         castellan_setup = CastellanAdminSetupPage(app, self.parent)
         multisig_init = InitiateMultisigPage(app, on_complete=self._on_multisig_init_complete, parent=None)
+        syncronize_ui = SynchronizationUI(app=app)
+        add_issuer_witnesses = ConfigureIssuerMultisigIdentifier(app, parent=None)
 
         self._pages = {
             "castellan_schema": SchemaListPage(app, None),
             "castellan_issued_credentials": IssuedCredentialsListPage(app, None),
             "castellan_received_credentials": ReceivedCredentialsListPage(app, None),
             "castellan_users": UsersListPage(app, None),
-            "castellan_issuers": IdentifiersListPage(
-                app, on_navigate_to_multisig_init=self._navigate_to_multisig_init, parent=None
-            ),
+            "castellan_issuers": issuer_list_page,
             "castellan_multisig_init": multisig_init,
             "castellan_setup": castellan_setup,
             "castellan_placeholder": CastellanPlaceholderPage("castellan", None),
+            "castellan_configure_multisig": add_issuer_witnesses,
+            "castellan_synchronization": syncronize_ui,
         }
 
+        issuer_list_page.configure_multisig_clicked.connect(self._on_configure_multisig)
+        issuer_list_page.synchronize_multisig_clicked.connect(self._on_synchronize_multisig)
         multisig_init.closed.connect(self._navigate_to_issuers)
         castellan_setup.setup_complete_clicked.connect(self._on_setup_complete_event)
+        add_issuer_witnesses.cancelled.connect(self._navigate_to_issuers)
+        add_issuer_witnesses.witness_created.connect(self._navigate_to_issuers)
+
+    def _on_configure_multisig(self, aid, identifier) -> None:
+        """Called when the issuer list page's "Configure Multisig" button is clicked."""
+        logger.info("Navigating to create witness page")
+        self._navigate("castellan_configure_multisig")
+        configure_page = self._pages.get("castellan_configure_multisig")
+        if configure_page and hasattr(configure_page, "on_show"):
+            configure_page.on_show(aid, identifier)
+
+    def _on_synchronize_multisig(self, aid, identifier) -> None:
+        """Called when the issuer list page's "Synchronize Multisig" button is clicked."""
+        logger.info("Navigating to synchronization page")
+        self._navigate("castellan_synchronization")
+        synchronization_page = self._pages.get("castellan_synchronization")
+        if synchronization_page and hasattr(synchronization_page, "on_show"):
+            synchronization_page.on_show(aid, identifier)
 
     def _on_multisig_init_complete(self, regk: str) -> None:
         """Called when InitiateMultisigPage finishes group+registry setup."""
@@ -219,7 +240,7 @@ class CastellanPlugin(
     # -------------------------------------------------------------------------
 
     @qasync.asyncSlot()
-    async def on_vault_opened(self, vault: "Vault") -> None:
+    async def on_vault_opened(self, vault) -> None:
         self._db = CastellanBaser(name=vault.hby.name, reopen=True)
 
         _, settings = next(self._db.castellan_settings.getItemIter(), (None, None))  # type: ignore
@@ -233,12 +254,12 @@ class CastellanPlugin(
             self.reset_essr(vault)
             await self.load_account(vault)
 
-    async def load_account(self, vault: "Vault"):
+    async def load_account(self, vault):
         response = await remoting.get_account(self._app, vault.plugin_state["castellan"]["settings"].issuer_aid)
         if response["success"]:
             vault.plugin_state["castellan"]["account"] = response["account"]
 
-    def on_vault_closed(self, vault: "Vault") -> None:
+    def on_vault_closed(self, vault) -> None:
         vault.plugin_state.pop("castellan", None)
         if self._db:
             self._db.close()
@@ -346,7 +367,7 @@ class CastellanPlugin(
         except Exception:
             logger.exception("Error handling new notification in CastellanPlugin")
 
-    def on_plugin_reset(self, vault: "Vault") -> None:
+    def on_plugin_reset(self, vault) -> None:
         if self._db:
             self._db.close(clear=True)
             self._db = None
@@ -375,11 +396,11 @@ class CastellanPlugin(
     # AccountProviderPlugin
     # -------------------------------------------------------------------------
 
-    def is_setup_complete(self, vault: "Vault") -> bool:
+    def is_setup_complete(self, vault) -> bool:
         state = vault.plugin_state.get("castellan", {})
         return state.get("settings") is not None
 
-    def get_setup_page(self, vault: "Vault") -> tuple[str, bool]:
+    def get_setup_page(self, vault) -> tuple[str, bool]:
         cdb = self._app.vault.plugin_state.get("castellan", {}).get("db")
         settings = cdb.castellan_settings.get(keys=("settings",)) if cdb else None
         if settings is None or settings.issuer_aid is None:
@@ -395,7 +416,7 @@ class CastellanPlugin(
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def reset_essr(vault: "Vault") -> None:
+    def reset_essr(vault) -> None:
         """Reset ESSR client with current account hab."""
         state = vault.plugin_state["castellan"]
         settings = state.get("settings")

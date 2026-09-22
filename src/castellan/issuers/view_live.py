@@ -1,3 +1,5 @@
+import json
+
 import qasync
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -5,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 from keri import help
 from keri.core import parsing
+from keri.db import basing
 from keri.help import helping
 from locksmith.ui import colors
 from locksmith.ui.styles import get_monospace_font_family
@@ -69,7 +72,7 @@ class ViewLiveMultisigIdentifierDialog(LocksmithDialog):
         )
 
         close_btn.clicked.connect(self._finished)
-        self.setFixedSize(660, 800)
+        self.setFixedSize(660, 850)
 
     def _finished(self):
         self.closed.emit()
@@ -297,7 +300,7 @@ class ViewLiveMultisigIdentifierDialog(LocksmithDialog):
         key_state_layout.addSpacing(5)
 
         self._local_lines = self._add_key_state_block(key_state_layout, "Local:")
-        self._remote_lines = self._add_key_state_block(key_state_layout, "Remote")
+        self._remote_lines = self._add_key_state_block(key_state_layout, "Remote:")
 
         self.content_layout.addWidget(key_state_frame)
 
@@ -404,8 +407,8 @@ class ViewLiveMultisigIdentifierDialog(LocksmithDialog):
         self.content_layout.addSpacing(12)
 
         # Side-by-side key state frames
-        comparison_layout = QHBoxLayout()
-        comparison_layout.setSpacing(12)
+        comparison_layout = QVBoxLayout()
+        comparison_layout.setSpacing(8)
 
         # Local frame (left)
         local_frame = self._create_key_state_side("Local Key State", is_local=True)
@@ -519,6 +522,13 @@ class ViewLiveMultisigIdentifierDialog(LocksmithDialog):
         self.catch_up_btn.setText("Catching Up...")
 
         try:
+            print(json.dumps(self.identifier, indent=2))
+            # Oobi with witnesses if we don't already know about them:
+            for witness in self.identifier['witnesses']:
+                if witness.get('witness_aid') not in self.app.hby.kevers:
+                    obr = basing.OobiRecord(date=helping.nowIso8601(), oobialias=witness.get('witness_alias'))
+                    self.app.hby.db.oobis.put(keys=(witness.get('witness_oobi'),), val=obr)
+
             # Get all the KELS (group members and group itself)
             await remoting.load_multisig_member_kels(self.app, self.identifier)
             result = await remoting.fetch_identifier_kel(self.app, self.aid)
@@ -532,6 +542,7 @@ class ViewLiveMultisigIdentifierDialog(LocksmithDialog):
 
             # Parse KEL
             kel_bytes = result.get('kel_bytes', b'')
+            print(kel_bytes)
             if not kel_bytes:
                 self.show_error("Remote KEL is empty")
                 self.catch_up_btn.setEnabled(True)

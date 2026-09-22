@@ -58,7 +58,7 @@ async def essr_health_check(app: "LocksmithApplication") -> Dict[str, Any]:
     essr = _get_essr(app)
     if not essr:
         return {'success': False, 'error': 'No ESSR connection'}
-    return await _essr_health_roundtrip(essr)
+    return await _essr_health_roundtrip(essr)  # type: ignore
 
 
 async def essr_health_guard(essr, max_attempts: int = 5, retry_delay: float = 1.0) -> Dict[str, Any]:
@@ -1571,7 +1571,6 @@ async def create_multisig_registry(
         logger.exception(f"Error creating registry: {e}")
         return {'success': False, 'error': str(e)}
 
-
 def get_multisig_state(app, identifier) -> str:
     """Determine multisig state: 'pending', 'ready', or 'active'."""
     aid = identifier.get('aid', '')
@@ -1672,4 +1671,155 @@ async def load_multisig_member_kels(app, identifier):
 
         if member_aid not in app.vault.kvy.kevers:
             raise ValueError(f"Member {member_aid} KEL would not parse.")
+
+async def update_multisig_witnesses(
+        app: "LocksmithApplication",
+        multisig_id: str,
+        adds: list[dict],
+        witness_threshold: int,
+        cuts: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Update witnesses for a multisig identifier.
+
+    Args:
+        app: The Locksmith application instance
+        multisig_id: The multisig identifier AID
+        adds: List of witness dictionaries to add with keys: 'aid', 'alias', 'oobi'
+        witness_threshold: The witness signing threshold
+        cuts: Optional list of tuples (witness_aid, witness_alias, witness_oobi) to remove
+
+    Returns:
+        Dict with 'success' boolean and optional 'error' or 'data' keys
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    if cuts is None:
+        cuts = []
+
+    try:
+        # Build request body
+        body = {
+            'adds': adds,
+            'cuts': cuts,
+            'witness_threshold': witness_threshold,
+        }
+
+        print(json.dumps(body, indent=2))
+
+        # URL-encode the multisig_id
+        encoded_id = urllib.parse.quote(multisig_id, safe='')
+
+        response = await essr.request(
+            path=f"/multisig/identifiers/{encoded_id}/witnesses",
+            method="POST",
+            json=body,
+            timeout=60,
+        )
+
+        if response is not None and response.status_code in (200, 201):
+            return {'success': True, 'data': response.json() if response.content else {}}
+        else:
+            if response is not None:
+                logger.error(f"Update witnesses failed with status {response.status_code}: {response.text}")
+                try:
+                    error_msg = response.json().get('description', f"Status {response.status_code}")
+                except Exception:
+                    error_msg = f"Status {response.status_code}"
+            else:
+                error_msg = "No response"
+            return {'success': False, 'error': error_msg}
+
+    except Exception as e:
+        logger.exception(f"Error updating witnesses: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def complete_multisig_witnesses(
+    app: "LocksmithApplication",
+    multisig_id: str,
+    rot: bytes,
+    data: list[dict],
+) -> Dict[str, Any]:
+    """
+    Complete witness rotation for a multisig identifier.
+
+    Args:
+        app: The Locksmith application instance
+        multisig_id: The multisig identifier AID
+        rot: The rotation event bytes
+        data: Metadata dictionary to include with the rotation
+
+    Returns:
+        Dict with 'success' boolean and optional 'error' or 'data' keys
+    """
+    essr = _get_essr(app)
+    if not essr:
+        return {'success': False, 'error': 'No ESSR connection'}
+
+    try:
+        # Build multipart form with rot and data
+        files = {
+            'rot': ('rot.cesr', rot, 'application/octet-stream'),
+            'data': ('data.json', json.dumps({'witnesses': data}), 'application/json'),
+        }
+
+        # URL-encode the multisig_id
+        encoded_id = urllib.parse.quote(multisig_id, safe='')
+
+        response = await essr.request(
+            path=f"/multisig/identifiers/{encoded_id}/witnesses",
+            method="PUT",
+            files=files,
+            timeout=60,
+        )
+
+        if response is not None and response.status_code in (200, 201):
+            return {'success': True, 'data': response.json() if response.content else {}}
+        else:
+            if response is not None:
+                logger.error(f"Complete witnesses rotation failed with status {response.status_code}: {response.text}")
+                try:
+                    error_msg = response.json().get('description', f"Status {response.status_code}")
+                except Exception:
+                    error_msg = f"Status {response.status_code}"
+            else:
+                error_msg = "No response"
+            return {'success': False, 'error': error_msg}
+
+    except Exception as e:
+        logger.exception(f"Error completing witnesses rotation: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+async def rotate_multisig_identifier(app, ghab, isith, nsith, toad, cuts, adds, data=None):
+    """ Perform a multisig key rotation
+
+    Perform a key rotation on local member hab then use the Kevers of the other
+    members to update and rotate the multisig identifier
+
+    The calling function needs to update the smids and rmids of the ghab before calling this function
+
+    """
+    hby = app.hby
+    member_hab = ghab.mhab
+
+    member_hab.rotate(isith="1", nsith="1", ncount=1)
+
+    verfers = []
+    for smid in ghab.smids:
+        verfers.append(hby.kevers[smid].verfers[0])
+
+    ndigers = []
+    for rmid in ghab.rmids:
+        ndigers.append(hby.kevers[rmid].ndigers[0])
+
+    rot = ghab.rotate(isith=isith, nsith=nsith, toad=toad, cuts=list(cuts), adds=list(adds),
+                      data=data, verfers=verfers, digers=ndigers)
+
+    print(rot)
+
+    return rot
 
