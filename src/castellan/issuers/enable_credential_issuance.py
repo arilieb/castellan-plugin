@@ -5,11 +5,12 @@ castellan.issuers.create_registry module
 Dialog for creating a credential registry for an identifier.
 """
 import qasync
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 from keri import help
 from keri.core import coring, eventing
-from keri.kering import TraitDex
+from keri.kering import TraitDex, Roles
 from keri.vdr import eventing as veventing
+from locksmith.ui import colors
 
 from locksmith.ui.toolkit.widgets import (
     LocksmithDialog, LocksmithInvertedButton, LocksmithButton, FloatingLabelLineEdit
@@ -19,7 +20,7 @@ from ..core import remoting
 logger = help.ogler.getLogger(__name__)
 
 
-class CreateRegistryDialog(LocksmithDialog):
+class EnableCredentialIssuanceDialog(LocksmithDialog):
     """Dialog for creating a credential registry for an identifier."""
 
     def __init__(self, app, identifier: dict, on_refresh=None, parent=None):
@@ -38,16 +39,28 @@ class CreateRegistryDialog(LocksmithDialog):
         content_layout.setContentsMargins(20, 20, 20, 20)
         content_layout.setSpacing(16)
 
+        # Description
+        desc = QLabel(
+            "In order to issue credentials with this identifier you must create a credential registry to house your credentials "
+            "and enable your Castellan server to serve credentials from this registry and to receive messages from others "
+            "on behalf of this identifier."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"font-size: 15px; color: {colors.TEXT_SUBTLE};")
+        content_layout.addWidget(desc)
+        content_layout.addSpacing(12)
+
+
         # Registry name input
         self.name_field = FloatingLabelLineEdit(label_text="Registry Name")
-        self.name_field.setPlaceholderText("Enter a name for this registry")
+        self.name_field.setPlaceholderText("Enter a name for a new registry")
         content_layout.addWidget(self.name_field)
 
         # Buttons
         button_row = QHBoxLayout()
         button_row.addStretch()
         self.cancel_btn = LocksmithInvertedButton("Cancel")
-        self.create_btn = LocksmithButton("Create")
+        self.create_btn = LocksmithButton("Enable")
         button_row.addWidget(self.cancel_btn)
         button_row.addWidget(self.create_btn)
         button_row.addStretch()
@@ -56,7 +69,7 @@ class CreateRegistryDialog(LocksmithDialog):
 
         super().__init__(
             parent=parent,
-            title="Create Credential Registry",
+            title="Enable Credential Issuance",
             title_icon=":/assets/material-icons/shield_lock.svg",
             content=content_widget,
             buttons=None,  # Buttons already in content
@@ -64,7 +77,7 @@ class CreateRegistryDialog(LocksmithDialog):
 
         self.cancel_btn.clicked.connect(self.close)
         self.create_btn.clicked.connect(self._on_create)
-        self.setFixedSize(480, 280)
+        self.setFixedSize(520, 400)
 
     def _validate_form(self) -> tuple[bool, list[str]]:
         """Validate form inputs."""
@@ -100,6 +113,9 @@ class CreateRegistryDialog(LocksmithDialog):
     @qasync.asyncSlot()
     async def _do_create(self):
         """Create registry and upload to server."""
+        state = self.app.vault.plugin_state.get("castellan", {})
+        settings = state.get("settings")
+
         try:
             multisig_id = self.identifier.get('id')
             registry_name = self.name_field.text().strip()
@@ -155,6 +171,13 @@ class CreateRegistryDialog(LocksmithDialog):
 
                 ixn_bytes = bytes(anc)
 
+                # Now create the end roles declaring castellan as both a mailbox and a registrar
+                route = "/end/role/add"
+                data = dict(cid=hab.pre, role=Roles.mailbox, eid=settings.castellan_aid)
+                mailbox_bytes = hab.reply(route=route, data=data)
+                data = dict(cid=hab.pre, role=Roles.registrar, eid=settings.castellan_aid)
+                registrar_bytes = hab.reply(route=route, data=data)
+
             else:
                 # Create registry locally
                 logger.info(f"Creating registry '{registry_name}' for {self.aid}")
@@ -186,12 +209,22 @@ class CreateRegistryDialog(LocksmithDialog):
                     vcp_bytes.extend(msg)
                 ixn_bytes = bytes(anc)
 
+                # Now create the end roles declaring castellan as both a mailbox and a registrar
+                route = "/end/role/add"
+                data = dict(cid=hab.pre, role=Roles.mailbox, eid=settings.castellan_aid)
+                mailbox_bytes = hab.reply(route=route, data=data)
+                data = dict(cid=hab.pre, role=Roles.registrar, eid=settings.castellan_aid)
+                registrar_bytes = hab.reply(route=route, data=data)
+
+
             # Upload to server
             result = await remoting.create_multisig_registry(
                 app=self.app,
                 multisig_id=multisig_id,
                 vcp_bytes=bytes(vcp_bytes),
                 ixn_bytes=ixn_bytes,
+                mailbox_bytes=mailbox_bytes,
+                registrar_bytes=registrar_bytes,
                 registry_name=registry_name,
             )
 
@@ -214,5 +247,5 @@ class CreateRegistryDialog(LocksmithDialog):
             # Restore button state
             self._is_creating = False
             self.create_btn.setEnabled(True)
-            self.create_btn.setText("Create")
+            self.create_btn.setText("Enable")
             self.cancel_btn.setEnabled(True)

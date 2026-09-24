@@ -72,7 +72,7 @@ class ViewLiveMultisigIdentifierDialog(LocksmithDialog):
         )
 
         close_btn.clicked.connect(self._finished)
-        self.setFixedSize(660, 850)
+        self.setFixedSize(660, 900)
 
     def _finished(self):
         self.closed.emit()

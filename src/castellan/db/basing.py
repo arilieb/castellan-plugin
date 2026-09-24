@@ -25,6 +25,7 @@ class CastellanSettings:
     registry_name: str = ""
     registrar_aid: str = ""
     registrar_url: str = ""
+    castellan_aid: str = ""
 
 
 @dataclass

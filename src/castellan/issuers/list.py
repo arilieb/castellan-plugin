@@ -16,6 +16,7 @@ from keri.help import helping
 from locksmith.ui import colors
 from locksmith.ui.toolkit.tables import PaginatedTableWidget
 
+from .enable_credential_issuance import EnableCredentialIssuanceDialog
 from .upload import UploadIdentifierDialog
 from .view import ViewIdentifierDialog
 from .view_inception import ViewIceptionMultisigIdentifierDialog
@@ -73,6 +74,7 @@ class IdentifiersListPage(QWidget):
             row_action_icons={
                 "View": ":/assets/material-icons/view.svg",
                 "Update": ":/assets/material-icons/cloud_sync.svg",
+                "Enable Credential Issuance": ":/assets/material-icons/shield_lock.svg",
                 "Add Witnesses": ":/assets/material-icons/witness2.svg",
                 "Synchronize": ":/assets/material-icons/sync_lock.svg",
                 "Delete": ":/assets/material-icons/delete.svg",
@@ -98,6 +100,7 @@ class IdentifiersListPage(QWidget):
         aid = identifier.get('aid', '')
         alias = identifier.get('alias', '')
         witnesses = identifier.get('witnesses', [])
+        registry = identifier.get('registry', None)
         created_at = helping.fromIso8601(identifier.get('created_at', '')).strftime("%b %d, %Y %I:%M %p")
 
         hab = self.app.vault.hby.habs.get(aid)
@@ -178,6 +181,7 @@ class IdentifiersListPage(QWidget):
             '_is_local': is_local,
             '_out_of_sync': is_out_of_sync,
             '_witnesses': witnesses,
+            '_registry': registry,
         }
 
         if is_out_of_sync:
@@ -198,19 +202,24 @@ class IdentifiersListPage(QWidget):
             "View": ":/assets/material-icons/view.svg",
             "Update": ":/assets/material-icons/cloud_sync.svg",
             "Delete": ":/assets/material-icons/delete.svg",
+            "Enable Credential Issuance": ":/assets/material-icons/shield_lock.svg",
             "Add Witnesses": ":/assets/material-icons/witness2.svg",
             "Change Witnesses": ":/assets/material-icons/witness2.svg",
             "Synchronize": ":/assets/material-icons/sync_lock.svg",
         }
         actions = ["View", "Delete"]
 
-        # Add Create Registry for live identifiers that we control
+        # Add Enable Credential Issuance for live identifiers that we control
         state = row_data.get('_state')
         witnesses = row_data.get('_witnesses', [])
+        registry = row_data.get('_registry', None)
         has_local_hab = row_data.get('_has_local_hab', False)
         if state in ('live', 'live_behind') and has_local_hab:
             actions.insert(1, "Change Witnesses" if witnesses else "Add Witnesses")  # Insert after View
             # actions.insert(2, "Synchronize")  # Insert after View
+
+        if not registry:
+            actions.insert(1, "Enable Credential Issuance")  # Insert after View
 
         if row_data.get('_is_local'):
             if row_data.get('_out_of_sync'):
@@ -269,6 +278,8 @@ class IdentifiersListPage(QWidget):
     def _on_row_action(self, row_data: dict[str, Any], action: str):
         if action == "View":
             self._view_identifier(row_data)
+        elif action == "Enable Credential Issuance":
+            self._on_create_registry(row_data)
         elif action == "Add Witnesses":
             self._on_add_witnesses(row_data)
         elif action == "Change Witnesses":
@@ -305,7 +316,7 @@ class IdentifiersListPage(QWidget):
         dialog.show()
 
     def _on_add_witnesses(self, row_data: dict[str, Any]):
-        """Launch Create Registry dialog for the selected identifier."""
+        """Launch Enable Credential Issuance dialog for the selected identifier."""
         aid = row_data.get('_aid', '')
         identifier = self._identifiers_cache.get(aid)
         if not identifier:
@@ -314,8 +325,24 @@ class IdentifiersListPage(QWidget):
 
         self.configure_multisig_clicked.emit(aid, identifier)
 
+    def _on_create_registry(self, row_data: dict[str, Any]):
+        """Launch Enable Credential Issuance dialog for the selected identifier."""
+        aid = row_data.get('_aid', '')
+        identifier = self._identifiers_cache.get(aid)
+        if not identifier:
+            logger.error(f"Identifier {aid} not in cache")
+            return
+
+        dialog = EnableCredentialIssuanceDialog(
+            app=self.app,
+            identifier=identifier,
+            on_refresh=self._refresh_table,
+            parent=self,
+        )
+        dialog.exec()
+
     def _on_synchronize(self, row_data: dict[str, Any]):
-        """Launch Create Registry dialog for the selected identifier."""
+        """Launch Synchronize dialog for the selected identifier."""
         aid = row_data.get('_aid', '')
         identifier = self._identifiers_cache.get(aid)
         if not identifier:

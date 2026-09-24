@@ -1517,6 +1517,8 @@ async def create_multisig_registry(
     multisig_id: str,
     vcp_bytes: bytes,
     ixn_bytes: bytes,
+    mailbox_bytes: bytes,
+    registrar_bytes: bytes,
     registry_name: str,
 ) -> Dict[str, Any]:
     """
@@ -1527,6 +1529,8 @@ async def create_multisig_registry(
         multisig_id: The multisig identifier AID (URL-encoded)
         vcp_bytes: The VCP (registry inception) event bytes
         ixn_bytes: The IXN (interaction) event bytes that anchor the VCP
+        mailbox_bytes: The mailbox event bytes
+        registrar_bytes: The registrar event bytes
         registry_name: User-friendly name for the registry
 
     Returns:
@@ -1541,6 +1545,8 @@ async def create_multisig_registry(
         files = {
             'vcp': ('vcp.cesr', vcp_bytes, 'application/octet-stream'),
             'ixn': ('ixn.cesr', ixn_bytes, 'application/octet-stream'),
+            'mailbox': ('mailbox.cesr', mailbox_bytes, 'application/octet-stream'),
+            'registrar': ('registrar.cesr', registrar_bytes, 'application/octet-stream'),
             'body': ('body.json', json.dumps({'name': registry_name}), 'application/json'),
         }
 

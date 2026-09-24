@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from keri import help
 from keri.app import connecting
 from keri.app.habbing import GroupHab
+from keri.core.serdering import SerderKERI
 from keri.kering import Schemes
 from locksmith.core import habbing
 from locksmith.core.apping import LocksmithApplication
@@ -151,7 +152,7 @@ class CastellanAdminSetupPage(LocksmithFormPage):
         layout.addSpacing(8)
 
         hint = QLabel(
-            "Enter the URL and OOBI of the Castellan service. After issuing a credential, "
+            "Enter the OOBI of the Castellan service. After issuing a credential, "
             "the plugin publishes credentials here."
         )
         hint.setStyleSheet(f"color: {colors.TEXT_SUBTLE}; font-size: 13px;")
@@ -347,6 +348,17 @@ class CastellanAdminSetupPage(LocksmithFormPage):
 
                 if not settings.registrar_url:
                     raise ValueError(f"Castellan URL not registered with Castellan AID {settings.registrar_aid}).")
+
+                # Create castellan OOBI URL by replacing the path with /oobi/castellan
+                parsed_oobi = urlparse(registrar_oobi)
+                castellan_oobi = parsed_oobi._replace(path="/oobi/castellan").geturl()
+                response = requests.get(registrar_oobi)
+                castellan_serder = SerderKERI(raw=bytes(response.content))
+
+                hab.psr.parse(ims=response.content)
+
+                org.update(pre=castellan_serder.pre, data=dict(alias="castellan-server", oobi=castellan_oobi))
+                settings.castellan_aid = castellan_serder.pre
 
             publish_mode = self.toggle.value()
             if publish_mode is not None:

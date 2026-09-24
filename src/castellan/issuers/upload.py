@@ -14,8 +14,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import qasync
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton
 from keri import help
 from keri.app.habbing import GroupHab
 from locksmith.ui import colors
@@ -65,33 +65,33 @@ class UploadIdentifierDialog(LocksmithDialog):
         self.identifier_selector.setFixedWidth(420)
         content_layout.addWidget(self.identifier_selector)
 
-        # desc = QLabel(
-        #     "or..."
-        # )
-        # desc.setWordWrap(True)
-        # desc.setStyleSheet(f"font-size: 15px; color: {colors.TEXT_SUBTLE};")
-        # content_layout.addWidget(desc)
-        # content_layout.addSpacing(8)
+        desc = QLabel(
+            "or..."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"font-size: 15px; color: {colors.TEXT_SUBTLE};")
+        content_layout.addWidget(desc)
+        content_layout.addSpacing(8)
 
-        # self.multisig_link = QPushButton("Create a Castellan Multi-signature Issuer")
-        # self.multisig_link.setCursor(Qt.CursorShape.PointingHandCursor)
-        # self.multisig_link.setFlat(True)
-        # self.multisig_link.setStyleSheet(f"""
-        #     QPushButton {{
-        #         border: none;
-        #         background: transparent;
-        #         color: {colors.BLUE_ACCENT};
-        #         text-decoration: underline;
-        #         font-size: 13px;
-        #         text-align: left;
-        #         padding: 0;
-        #     }}
-        #     QPushButton:hover {{
-        #         color: {colors.BLUE_SELECTION};
-        #     }}
-        # """)
-        # self.multisig_link.clicked.connect(self._on_multisig_link_clicked)
-        # content_layout.addWidget(self.multisig_link)
+        self.multisig_link = QPushButton("Create a Castellan Multi-signature Issuer")
+        self.multisig_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.multisig_link.setFlat(True)
+        self.multisig_link.setStyleSheet(f"""
+            QPushButton {{
+                border: none;
+                background: transparent;
+                color: {colors.BLUE_ACCENT};
+                text-decoration: underline;
+                font-size: 13px;
+                text-align: left;
+                padding: 0;
+            }}
+            QPushButton:hover {{
+                color: {colors.BLUE_SELECTION};
+            }}
+        """)
+        self.multisig_link.clicked.connect(self._on_multisig_link_clicked)
+        content_layout.addWidget(self.multisig_link)
 
         content_layout.addStretch()
 

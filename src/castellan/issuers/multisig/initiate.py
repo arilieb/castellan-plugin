@@ -446,7 +446,6 @@ class InitiateMultisigPage(LocksmithFormPage):
         if self.app and self.app.vault:
             state = self.app.vault.plugin_state.get("castellan", {})
             settings = state.get("settings")
-            print(settings)
             if settings and hasattr(settings, 'issuer_aid') and settings.issuer_aid:
                 return settings.issuer_aid
 
